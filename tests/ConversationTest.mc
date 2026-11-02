@@ -166,6 +166,38 @@ function pairingShowsTheCodeAndStoresTheKey(logger as Test.Logger) as Boolean {
     client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret" });
     Test.assertEqual(c.state, STATE_IDLE);
     Test.assertEqual(Settings.key(), "secret");
+    Test.assertEqual(c.popup, Settings.text(Rez.Strings.PairDone));
+    Test.assert(c.isEmpty() && c.pulsing);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aLostConnectionKeepsThePairingCode(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(false);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
+    c.pollPairing();
+    client.answer(RESULT_NO_PHONE, -104, null);
+    Test.assertEqual(c.pairingCode, "482913");
+    // The owner confirmed meanwhile: the next poll still gets the key
+    c.pollPairing();
+    Test.assertEqual(client.calls[client.calls.size() - 1], "poll:p1");
+    client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret" });
+    Test.assertEqual(c.state, STATE_IDLE);
+    ConversationTests.tearDown(c);
+    // An expired pairing starts over
+    t = ConversationTests.setUp(false);
+    c = t[0] as Conversation;
+    client = t[1] as FakeClient;
+    c.startOnce();
+    client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
+    c.pollPairing();
+    client.answer(RESULT_EXPIRED, 410, null);
+    Test.assertEqual(c.pairingCode, "");
+    Test.assertEqual(client.calls[client.calls.size() - 1], "pair");
     ConversationTests.tearDown(c);
     return true;
 }
@@ -285,6 +317,55 @@ function aRemovedWatchPairsWithoutListening(logger as Test.Logger) as Boolean {
     client.answer(RESULT_UNAUTHORIZED, 401, { "error" => "unauthorized" });
     Test.assertEqual(c.state, STATE_PAIRING);
     Test.assert(!(t[2] as FakeRecorder).started);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aKeyRevokedWhileThinkingOrBeforeTheVoicePairs(logger as Test.Logger) as Boolean {
+    // Revoked while the agent thinks: the reply poll is refused
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    client.answer(RESULT_UNAUTHORIZED, 401, null);
+    Test.assertEqual(c.state, STATE_PAIRING);
+    ConversationTests.tearDown(c);
+    // Revoked after the reply text, before its audio
+    t = ConversationTests.setUp(true);
+    c = t[0] as Conversation;
+    client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    client.answer(RESULT_OK, 200, { "reply" => "b", "audio" => true });
+    client.answer(RESULT_UNAUTHORIZED, 401, null);
+    Test.assertEqual(c.state, STATE_PAIRING);
+    Test.assertEqual((t[3] as FakePlayer).played, 0);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function pairingAgainClearsTheConversation(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    client.answer(RESULT_OK, 200, { "reply" => "b", "audio" => false });
+    c.onSelect();
+    Test.assertEqual(c.history.size(), 1);
+    // The watch removed in Home Assistant: refused, paired again
+    c.onAudioData([1]b);
+    client.answer(RESULT_UNAUTHORIZED, 401, null);
+    client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
+    c.pollPairing();
+    client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "k2" });
+    Test.assert(c.isEmpty());
     ConversationTests.tearDown(c);
     return true;
 }

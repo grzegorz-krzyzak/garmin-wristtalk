@@ -240,16 +240,33 @@ class Conversation {
         if (result.ok() && result.text("state").equals("paired")) {
             Settings.setKey(result.text("key"));
             pairingCode = "";
+            // A new watch for Home Assistant, with a new conversation: the old one goes from the
+            // screen too (it may show the house to whoever holds a removed watch)
+            history = [] as Array<Array>;
+            heard = "";
+            reply = "";
+            error = "";
+            notice = "";
+            scroll = 0;
+            _lastCommandAt = null;
             state = STATE_IDLE;
             Haptics.buzz(BUZZ_REPLY);
-            notice = Settings.text(Rez.Strings.PairDone);
+            showPopup(Settings.text(Rez.Strings.PairDone), POPUP_MS);
             armIdleExit(Settings.idleExitMs());
-        } else if (result.ok()) {
+        } else if (result.ok() || !pairingEnded(result)) {
+            // Pending, or the connection failed for a moment: the code stays on screen - Home
+            // Assistant still shows it, and a key confirmed meanwhile can still be collected
             waitThen(IDLE_POLL_MS, method(:pollPairing));
         } else {
             beginPairing();
         }
         WatchUi.requestUpdate();
+    }
+
+    //! Home Assistant answered that this pairing is over (expired, closed, refused)
+    private function pairingEnded(result as Result) as Boolean {
+        return result.kind == RESULT_EXPIRED || result.kind == RESULT_PAIRING_CLOSED
+            || result.kind == RESULT_NOT_FOUND || result.kind == RESULT_TOO_MANY;
     }
 
     // --- input --------------------------------------------------------------------------------
@@ -398,6 +415,7 @@ class Conversation {
         _recorder.stop();
         _finalPending = true;
         state = STATE_RECOGNIZING;
+        devTrace(System.getTimer() + " START: end of the command");
         WatchUi.requestUpdate();
         sendChunk(true);
     }
@@ -486,7 +504,13 @@ class Conversation {
         if (state != STATE_SENDING) {
             return;
         }
-        // Any failure: the reply text is on screen already - only the voice is missing
+        if (result.kind == RESULT_UNAUTHORIZED) {
+            // The watch was removed meanwhile: pair now, or the next START would open the
+            // microphone only to be refused
+            reconnect();
+            return;
+        }
+        // Any other failure: the reply text is on screen already - only the voice is missing
         if (result.ok() && result.data instanceof ByteArray
                 && _player.play(result.data as ByteArray, Settings.volume(), method(:onPlayed))) {
             state = STATE_PLAYING;
@@ -693,9 +717,14 @@ class Conversation {
         tick++;
         if (popup.length() > 0 && _popupUntil > 0 && System.getTimer() >= _popupUntil) {
             popup = "";
-            if (!_animating && !pulsing) {
+            if (!_animating) {
                 _tickTimer.stop();
                 _ticking = false;
+                if (pulsing) {
+                    // The popup ran the fast ticks; the pulse goes on at its own pace
+                    _ticking = true;
+                    _tickTimer.start(method(:onTick), PULSE_MS, true);
+                }
             }
         }
         WatchUi.requestUpdate();

@@ -148,12 +148,26 @@ class HaClient {
         var body = data instanceof Dictionary || data instanceof ByteArray ? data : null;
         var request = context as Array;
         devTrace(System.getTimer() + " " + (request[1] as String) + " -> " + code + " "
-            + (data instanceof ByteArray ? data.size() + " bytes" : data));
+            + (data instanceof ByteArray ? data.size() + " bytes" : masked(data)));
         (request[0] as Method(result as Result) as Void).invoke(new Result(classify(code, body), code, body));
     }
 
-    //! By the status alone: Connect IQ gives no body for a status other than 200 (measured in the
-    //! simulator), so every case to tell apart has its own status
+    //! By the status alone: Connect IQ may drop the body of a status other than 200 (measured in the
+    //! simulator for the chunk requests, binary body), so every case to tell apart has its own status
+    //! What the trace may show of a response: never the pairing key
+    private function masked(data as Dictionary or String or Null) as Object? {
+        if (!(data instanceof Dictionary) || !(data as Dictionary).hasKey("key")) {
+            return data;
+        }
+        var shown = {} as Dictionary;
+        var keys = (data as Dictionary).keys();
+        for (var i = 0; i < keys.size(); i++) {
+            shown[keys[i]] = (data as Dictionary)[keys[i]];
+        }
+        shown["key"] = "***";
+        return shown;
+    }
+
     static function classify(code as Number, body as Dictionary or ByteArray or Null) as ResultKind {
         if (code == 200) {
             return RESULT_OK;

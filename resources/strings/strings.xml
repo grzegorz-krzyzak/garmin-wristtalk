@@ -54,7 +54,7 @@
     <string id="PairOpenInHaHint">WristTalk</string>
     <string id="PairAddWatchButton">+ Add watch</string>
     <string id="PairNoAddress">Set the house address in the WristTalk settings in Garmin Connect</string>
-    <string id="PairDone">Paired - press START and speak</string>
+    <string id="PairDone">Paired</string>
     <string id="ErrTooMany">Too many commands - wait a moment.</string>
     <string id="ErrBusy">Another command is still running.</string>
     <string id="ErrUpdateApp">Update WristTalk on the watch.</string>

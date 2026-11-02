@@ -5,11 +5,13 @@ reply from the watch speaker. The command goes to an Assist pipeline of your Hom
 the **WristTalk integration** ([ha-wristtalk](https://github.com/grzegorz-krzyzak/ha-wristtalk)),
 which has to be installed first.
 
-Independent project, not affiliated with the Open Home Foundation, Home Assistant or Garmin.
+**A personal, non-commercial hobby project by a private individual.** Not affiliated with or endorsed by
+the Open Home Foundation, Home Assistant or Garmin.
 Requires a Home Assistant server reachable over HTTPS with a trusted certificate (for example Home
 Assistant Cloud) - the watch reaches it through the phone.
 
-Supported watch: fēnix 8 Solar 51 mm (Connect IQ API 6.0).
+For Garmin watches with a microphone and a speaker for apps (Connect IQ API 6.0 or newer). The
+first version supports the fēnix 8 Solar 51 mm; more models will follow.
 
 ## Use
 
@@ -51,3 +53,8 @@ to `bin/simulator.log` when started with `tools/build.sh start`.
 - `source/ui` - views and drawing.
 - `source-release`, `source-dev` (generated) - build profiles.
 - `tests` - unit tests of the logic with fake connection, microphone and speaker.
+
+## Licence
+
+Apache-2.0 - see [LICENSE](LICENSE). The name "WristTalk" and the icon are not covered by the
+licence: a modified or republished copy must use its own name and icon.
