@@ -1,0 +1,51 @@
+<settings>
+    <setting propertyKey="@Properties.houseUrl" title="@Strings.HouseUrlTitle" prompt="@Strings.HouseUrlPrompt">
+        <settingConfig type="url"/>
+    </setting>
+    <setting propertyKey="@Properties.reconnect" title="@Strings.ReconnectTitle">
+        <settingConfig type="boolean"/>
+    </setting>
+    <setting propertyKey="@Properties.listenOnOpen" title="@Strings.ListenOnOpenTitle">
+        <settingConfig type="boolean"/>
+    </setting>
+    <setting propertyKey="@Properties.afterReply" title="@Strings.AfterReplyTitle">
+        <settingConfig type="list">
+            <listEntry value="0">@Strings.AfterReplyWait</listEntry>
+            <listEntry value="1">@Strings.AfterReplyListen</listEntry>
+        </settingConfig>
+    </setting>
+    <setting propertyKey="@Properties.replyMode" title="@Strings.ReplyModeTitle">
+        <settingConfig type="list">
+            <listEntry value="0">@Strings.ReplyVoiceText</listEntry>
+            <listEntry value="1">@Strings.ReplyTextOnly</listEntry>
+        </settingConfig>
+    </setting>
+    <setting propertyKey="@Properties.volume" title="@Strings.VolumeTitle">
+        <settingConfig type="list">
+            <listEntry value="0">@Strings.VolumeQuiet</listEntry>
+            <listEntry value="1">@Strings.VolumeMedium</listEntry>
+            <listEntry value="2">@Strings.VolumeLoud</listEntry>
+        </settingConfig>
+    </setting>
+    <setting propertyKey="@Properties.textSize" title="@Strings.TextSizeTitle">
+        <settingConfig type="list">
+            <listEntry value="0">@Strings.TextSmall</listEntry>
+            <listEntry value="1">@Strings.TextLarge</listEntry>
+        </settingConfig>
+    </setting>
+    <setting propertyKey="@Properties.vibration" title="@Strings.VibrationTitle">
+        <settingConfig type="list">
+            <listEntry value="0">@Strings.VibrationFull</listEntry>
+            <listEntry value="1">@Strings.VibrationMinimal</listEntry>
+            <listEntry value="2">@Strings.VibrationOff</listEntry>
+        </settingConfig>
+    </setting>
+    <setting propertyKey="@Properties.idleExitS" title="@Strings.IdleExitTitle">
+        <settingConfig type="list">
+            <listEntry value="15">@Strings.Idle15</listEntry>
+            <listEntry value="30">@Strings.Idle30</listEntry>
+            <listEntry value="60">@Strings.Idle60</listEntry>
+            <listEntry value="120">@Strings.Idle120</listEntry>
+        </settingConfig>
+    </setting>
+</settings>

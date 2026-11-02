@@ -1,0 +1,2 @@
+# Dev build (simulator): the house address default from .dev-house-url (generated, not in git)
+base.sourcePath = source;source-dev

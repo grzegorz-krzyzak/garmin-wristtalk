@@ -1,0 +1,2 @@
+# Unit tests (Run No Evil): built with --unit-test, run with monkeydo -t
+base.sourcePath = source;source-release;tests

@@ -1,0 +1,20 @@
+<properties>
+    <!-- The house address (HTTPS) - pasted from the WristTalk integration in Home Assistant -->
+    <property id="houseUrl" type="string"></property>
+    <!-- "Reconnect" works as a button: on -> the watch pairs again and sets it back off -->
+    <property id="reconnect" type="boolean">false</property>
+    <!-- Start listening as soon as the app opens -->
+    <property id="listenOnOpen" type="boolean">true</property>
+    <!-- After a reply: 0 = wait for START, 1 = listen again (conversation mode) -->
+    <property id="afterReply" type="number">0</property>
+    <!-- Reply: 0 = voice and text, 1 = text only (also the quick switch in the watch menu) -->
+    <property id="replyMode" type="number">0</property>
+    <!-- Reply volume: 0 = quiet, 1 = medium, 2 = loud -->
+    <property id="volume" type="number">1</property>
+    <!-- Text size: 0 = small, 1 = large -->
+    <property id="textSize" type="number">0</property>
+    <!-- 0 = full (start, sent, reply, error), 1 = minimal (reply, error), 2 = off -->
+    <property id="vibration" type="number">1</property>
+    <!-- Close after this many seconds without input -->
+    <property id="idleExitS" type="number">30</property>
+</properties>
