@@ -23,10 +23,6 @@ class AssistApp extends Application.AppBase {
     // Foreground only - the glance never runs it
     (:typecheck([disableGlanceCheck]))
     function getInitialView() as [Views] or [Views, InputDelegates] {
-        var probe = startView();
-        if (probe != null) {
-            return probe;
-        }
         var conversation = new Conversation(new HaClient(Settings.APP_VERSION), new Recorder(), new Player());
         _conversation = conversation;
         return [new AssistView(conversation), new AssistDelegate(conversation)];
