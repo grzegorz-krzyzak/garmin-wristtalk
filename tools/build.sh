@@ -1,11 +1,13 @@
 #!/bin/bash
 # One command per build profile:
 #   tools/build.sh dev      - simulator build; the house address default from .dev-house-url
+#   tools/build.sh device   - the same for a real watch (sideloaded: no settings from Garmin Connect,
+#                             so the house address is built in); closes when idle as set
 #   tools/build.sh test     - unit tests (Run No Evil) in the running simulator
 #   tools/build.sh release  - strict type check, no debug information, .iq for the store
 #   tools/build.sh run      - dev build, then start it in the simulator
 #   tools/build.sh start    - start the last dev build again (simulator opened if needed), in the background;
-#                             what the app prints goes to bin/simulator.log
+#                             what the simulator prints goes to bin/simulator.log
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SDK="${CIQ_SDK:-$(cat "$HOME/Library/Application Support/Garmin/ConnectIQ/current-sdk.cfg" 2>/dev/null | sed 's:/*$::')}"
@@ -14,6 +16,7 @@ DEVICE="${CIQ_DEVICE:-fenix8solar51mm}"
 mkdir -p bin
 
 dev_config() {
+    local idle="${1:-300000}"
     local url=""
     [ -f .dev-house-url ] && url="$(tr -d '[:space:]' < .dev-house-url)"
     mkdir -p source-dev
@@ -25,14 +28,9 @@ function devHouseUrl() as String {
     return "$url";
 }
 
-//! Dev build: stay open 5 minutes without input (testing in the simulator); 0 = the setting
+//! Dev build: in the simulator stay open 5 minutes without input; 0 = the setting (device build)
 function devIdleExitMs() as Number {
-    return 300000;
-}
-
-//! Dev build: a line to the simulator's output (bin/simulator.log with "start")
-function devTrace(line as String) as Void {
-    Toybox.System.println(line);
+    return $idle;
 }
 MC
 }
@@ -45,6 +43,13 @@ case "${1:-dev}" in
             pgrep -f "MacOS/simulator" >/dev/null || { open "$SDK/bin/ConnectIQ.app"; sleep 6; }
             "$SDK/bin/monkeydo" bin/wristtalk.prg "$DEVICE"
         fi
+        ;;
+    device)
+        dev_config 0
+        # The name the watch keeps: copying it over the old file leaves one WristTalk in GARMIN/APPS
+        mkdir -p bin/device
+        "$SDK/bin/monkeyc" -f "monkey.jungle;dev.jungle" -d "$DEVICE" -o bin/device/WRISTTALK.PRG -y "$KEY" -l 2 -w
+        echo "bin/device/WRISTTALK.PRG - copy it to GARMIN/APPS on the watch, over the old WRISTTALK.PRG"
         ;;
     start)
         [ -f bin/wristtalk.prg ] || { echo "no build yet - run: $0 dev" >&2; exit 1; }
@@ -62,7 +67,7 @@ case "${1:-dev}" in
         "$SDK/bin/monkeyc" -f monkey.jungle -e -r -l 3 -o bin/wristtalk.iq -y "$KEY"
         ;;
     *)
-        echo "usage: $0 dev|run|start|test|release" >&2
+        echo "usage: $0 dev|device|run|start|test|release" >&2
         exit 2
         ;;
 esac

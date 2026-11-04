@@ -9,7 +9,3 @@ function devHouseUrl() as String {
 function devIdleExitMs() as Number {
     return 0;
 }
-
-//! Release build: no trace
-function devTrace(line as String) as Void {
-}

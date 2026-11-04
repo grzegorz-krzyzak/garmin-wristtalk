@@ -1,6 +1,5 @@
 import Toybox.Communications;
 import Toybox.Lang;
-import Toybox.System;
 
 //! What a request ended with, in plain kinds the logic can act on
 enum ResultKind {
@@ -136,38 +135,18 @@ class HaClient {
             done.invoke(new Result(RESULT_NO_ADDRESS, 0, null));
             return;
         }
-        options[:context] = [done, path];
+        // A handler object per request, not :context: without the phone Connect IQ calls the
+        // callback at once with only the code and the data (measured on the fēnix 8, 2026-11-04 -
+        // a three-argument callback crashed the app with "Not Enough Arguments")
+        var pending = new PendingRequest(done);
         Communications.makeWebRequest(base + API + path, params, options as {
             :method as Communications.HttpRequestMethod, :headers as Dictionary,
-            :body as String or ByteArray, :responseType as Communications.HttpResponseContentType,
-            :context as Object?
-        }, method(:onResponse));
-    }
-
-    function onResponse(code as Number, data as Dictionary or String or ByteArray or Null, context as Object) as Void {
-        var body = data instanceof Dictionary || data instanceof ByteArray ? data : null;
-        var request = context as Array;
-        devTrace(System.getTimer() + " " + (request[1] as String) + " -> " + code + " "
-            + (data instanceof ByteArray ? data.size() + " bytes" : masked(data)));
-        (request[0] as Method(result as Result) as Void).invoke(new Result(classify(code, body), code, body));
+            :body as String or ByteArray, :responseType as Communications.HttpResponseContentType
+        }, pending.method(:onResponse));
     }
 
     //! By the status alone: Connect IQ may drop the body of a status other than 200 (measured in the
     //! simulator for the chunk requests, binary body), so every case to tell apart has its own status
-    //! What the trace may show of a response: never the pairing key
-    private function masked(data as Dictionary or String or Null) as Object? {
-        if (!(data instanceof Dictionary) || !(data as Dictionary).hasKey("key")) {
-            return data;
-        }
-        var shown = {} as Dictionary;
-        var keys = (data as Dictionary).keys();
-        for (var i = 0; i < keys.size(); i++) {
-            shown[keys[i]] = (data as Dictionary)[keys[i]];
-        }
-        shown["key"] = "***";
-        return shown;
-    }
-
     static function classify(code as Number, body as Dictionary or ByteArray or Null) as ResultKind {
         if (code == 200) {
             return RESULT_OK;
@@ -192,5 +171,20 @@ class HaClient {
                 return RESULT_NO_PHONE;
         }
         return code >= 500 ? RESULT_SERVER : RESULT_ERROR;
+    }
+}
+
+//! One request's answer: the callback Connect IQ calls with the code and the data
+class PendingRequest {
+
+    private var _done as Method(result as Result) as Void;
+
+    function initialize(done as Method(result as Result) as Void) {
+        _done = done;
+    }
+
+    function onResponse(code as Number, data as Dictionary or String or ByteArray or Null) as Void {
+        var body = data instanceof Dictionary || data instanceof ByteArray ? data : null;
+        _done.invoke(new Result(HaClient.classify(code, body), code, body));
     }
 }

@@ -11,15 +11,11 @@ enum Buzz {
 
 //! Vibration cues: one short when the microphone opens, two when the command is sent, one when the
 //! reply is ready (the wrist can go down), one before closing on idle, one long on an error.
-//! Setting "vibration": 0 full, 1 minimal (reply and error - the default), 2 off.
+//! Which cues the setting allows the conversation decides; this only vibrates.
 module Haptics {
 
-    function buzz(kind as Buzz) as Void {
+    function vibrate(kind as Buzz) as Void {
         if (!Capabilities.hasVibration()) {
-            return;
-        }
-        var level = Settings.number("vibration", 1);
-        if (level == 2 || (level == 1 && (kind == BUZZ_LISTEN || kind == BUZZ_SENT))) {
             return;
         }
         var pattern = [];

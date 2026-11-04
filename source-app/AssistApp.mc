@@ -25,7 +25,8 @@ class AssistApp extends Application.AppBase {
     function getInitialView() as [Views] or [Views, InputDelegates] {
         var conversation = new Conversation(new HaClient(Settings.APP_VERSION), new Recorder(), new Player());
         _conversation = conversation;
-        return [new AssistView(conversation), new AssistDelegate(conversation)];
+        var scroller = new Scroller();
+        return [new AssistView(conversation, scroller), new AssistDelegate(conversation, scroller)];
     }
 
     //! Garmin Connect sent new settings: "Reconnect", or a new house address

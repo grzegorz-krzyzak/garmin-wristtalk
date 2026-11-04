@@ -1,5 +1,5 @@
 <iq:manifest xmlns:iq="http://www.garmin.com/xml/connectiq" version="3">
-    <iq:application id="d106fb6d536e4d0f895290732d14ce5f" type="watch-app" name="@Strings.AppName" entry="AssistApp" launcherIcon="@Drawables.LauncherIcon" minApiLevel="6.0.3">
+    <iq:application id="d106fb6d536e4d0f895290732d14ce5f" type="watch-app" name="@Strings.AppName" entry="AssistApp" version="0.2.7" launcherIcon="@Drawables.LauncherIcon" minApiLevel="6.0.3">
         <iq:products>
             <iq:product id="fenix8solar51mm"/>
         </iq:products>

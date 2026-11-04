@@ -1,6 +1,8 @@
 import Toybox.Application;
 import Toybox.Lang;
+import Toybox.System;
 import Toybox.Test;
+import Toybox.WatchUi;
 
 //! Unit tests of the logic (Run No Evil): fakes of the connection, the microphone and the speaker.
 //! Built only with --unit-test (test.jungle), never in a device build.
@@ -158,11 +160,11 @@ function pairingShowsTheCodeAndStoresTheKey(logger as Test.Logger) as Boolean {
     Test.assertEqual(c.state, STATE_PAIRING);
     Test.assertEqual(client.calls[0], "pair");
     client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
-    Test.assertEqual(c.pairingCode, "482913");
-    c.pollPairing();
+    Test.assertEqual(c.pairing.code, "482913");
+    c.pairing.poll();
     client.answer(RESULT_OK, 200, { "state" => "pending" });
     Test.assertEqual(c.state, STATE_PAIRING);
-    c.pollPairing();
+    c.pairing.poll();
     client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret" });
     Test.assertEqual(c.state, STATE_IDLE);
     Test.assertEqual(Settings.key(), "secret");
@@ -179,11 +181,11 @@ function aLostConnectionKeepsThePairingCode(logger as Test.Logger) as Boolean {
     var client = t[1] as FakeClient;
     c.startOnce();
     client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
-    c.pollPairing();
+    c.pairing.poll();
     client.answer(RESULT_NO_PHONE, -104, null);
-    Test.assertEqual(c.pairingCode, "482913");
+    Test.assertEqual(c.pairing.code, "482913");
     // The owner confirmed meanwhile: the next poll still gets the key
-    c.pollPairing();
+    c.pairing.poll();
     Test.assertEqual(client.calls[client.calls.size() - 1], "poll:p1");
     client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret" });
     Test.assertEqual(c.state, STATE_IDLE);
@@ -194,9 +196,9 @@ function aLostConnectionKeepsThePairingCode(logger as Test.Logger) as Boolean {
     client = t[1] as FakeClient;
     c.startOnce();
     client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
-    c.pollPairing();
+    c.pairing.poll();
     client.answer(RESULT_EXPIRED, 410, null);
-    Test.assertEqual(c.pairingCode, "");
+    Test.assertEqual(c.pairing.code, "");
     Test.assertEqual(client.calls[client.calls.size() - 1], "pair");
     ConversationTests.tearDown(c);
     return true;
@@ -210,7 +212,7 @@ function pairingWaitsForAddWatchInHomeAssistant(logger as Test.Logger) as Boolea
     c.startOnce();
     client.answer(RESULT_PAIRING_CLOSED, 403, { "error" => "pairing_closed" });
     Test.assertEqual(c.state, STATE_PAIRING);
-    Test.assertEqual(c.notice, Settings.text(Rez.Strings.PairOpenInHa));
+    Test.assertEqual(c.pairing.notice, Settings.text(Rez.Strings.PairOpenInHa));
     ConversationTests.tearDown(c);
     return true;
 }
@@ -221,7 +223,7 @@ function noAddressAsksForTheSetting(logger as Test.Logger) as Boolean {
     Application.Properties.setValue("houseUrl", "");
     var c = t[0] as Conversation;
     c.startOnce();
-    Test.assertEqual(c.notice, Settings.text(Rez.Strings.PairNoAddress));
+    Test.assertEqual(c.pairing.notice, Settings.text(Rez.Strings.PairNoAddress));
     Test.assertEqual((t[1] as FakeClient).calls.size(), 0);
     ConversationTests.tearDown(c);
     return true;
@@ -363,7 +365,7 @@ function pairingAgainClearsTheConversation(logger as Test.Logger) as Boolean {
     c.onAudioData([1]b);
     client.answer(RESULT_UNAUTHORIZED, 401, null);
     client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
-    c.pollPairing();
+    c.pairing.poll();
     client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "k2" });
     Test.assert(c.isEmpty());
     ConversationTests.tearDown(c);
@@ -380,7 +382,7 @@ function nothingHeardIsANoteNotAFailure(logger as Test.Logger) as Boolean {
     client.answer(RESULT_OK, 200, { "state" => "nothing" });
     Test.assertEqual(c.state, STATE_IDLE);
     Test.assertEqual(c.popup, Settings.text(Rez.Strings.NotHeard));
-    Test.assertEqual(c.notice, "");
+    Test.assertEqual(c.pairing.notice, "");
     Test.assert(c.waitingForStart() && c.pulsing);
     // BACK closes only the popup, the app stays
     Test.assert(c.onBack());
@@ -416,16 +418,16 @@ function startKeepsTheAppOpenDuringTheCountdown(logger as Test.Logger) as Boolea
     Application.Properties.setValue("listenOnOpen", false);
     var c = t[0] as Conversation;
     c.startOnce();
-    c.onIdleWarning();
-    Test.assertEqual(c.countdown, 10);
-    c.onCountdown();
-    Test.assertEqual(c.countdown, 9);
+    c.idle.onWarning();
+    Test.assertEqual(c.idle.countdown, 10);
+    c.idle.onCountdown();
+    Test.assertEqual(c.idle.countdown, 9);
     // START only stops the countdown - it does not start listening
     c.onSelect();
-    Test.assertEqual(c.countdown, 0);
+    Test.assertEqual(c.idle.countdown, 0);
     Test.assertEqual(c.state, STATE_IDLE);
     // BACK during the countdown closes the app (the default action)
-    c.onIdleWarning();
+    c.idle.onWarning();
     Test.assert(!c.onBack());
     ConversationTests.tearDown(c);
     return true;
@@ -489,5 +491,49 @@ function protocolErrorsAreClassified(logger as Test.Logger) as Boolean {
     Test.assertEqual(HaClient.classify(503, null), RESULT_SERVER);
     Test.assertEqual(HaClient.classify(-1001, null), RESULT_HTTPS);
     Test.assertEqual(HaClient.classify(-104, null), RESULT_NO_PHONE);
+    return true;
+}
+
+(:test)
+function aTapDoesNotStartOnlyTheStartButtonDoes(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    Application.Properties.setValue("listenOnOpen", false);
+    var c = t[0] as Conversation;
+    var delegate = new AssistDelegate(c, new Scroller());
+    c.startOnce();
+    // A tap on the screen arrives as a select without a key pressed before it
+    delegate.onSelect();
+    Test.assertEqual(c.state, STATE_IDLE);
+    // START: the key press comes first, then the select
+    delegate.onKeyPressed(new WatchUi.KeyEvent(WatchUi.KEY_ENTER, WatchUi.PRESS_TYPE_DOWN));
+    delegate.onSelect();
+    Test.assertEqual(c.state, STATE_LISTENING);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function theScrollerGlidesAndStopsAtTheEnd(logger as Test.Logger) as Boolean {
+    var s = new Scroller();
+    s.lineHeight = 20;
+    s.lines(2);
+    Test.assertEqual(s.scroll, -40);
+    s.drag(15);
+    Test.assertEqual(s.scroll, -25);
+    // A glide moves on and slows down
+    s.glide(1000.0);
+    var now = System.getTimer();
+    Test.assert(s.advance(now + 100));
+    Test.assert(s.scroll > -25);
+    Test.assert(s.gliding());
+    // The end of the conversation stops it where the conversation allows
+    s.limitTo(30);
+    Test.assertEqual(s.scroll, 30);
+    Test.assert(!s.gliding());
+    // A slow glide stops by itself
+    s.glide(30.0);
+    Test.assert(!s.advance(System.getTimer() + 100));
+    s.reset();
+    Test.assertEqual(s.scroll, 0);
     return true;
 }

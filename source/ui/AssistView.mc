@@ -1,5 +1,6 @@
 import Toybox.Graphics;
 import Toybox.Lang;
+import Toybox.System;
 import Toybox.WatchUi;
 
 //! Draws what the conversation holds; knows nothing about the network
@@ -10,12 +11,16 @@ class AssistView extends WatchUi.View {
     const START_ANGLE = 30;
     const ICON_Y = 0.05;       // the reply-mode icon (centre), of the screen height
     const STATUS_Y = 0.09;     // the status line (top), of the screen height
+    const SPEAKER_ASIDE = 34;  // the speaker icon right of the middle (the system microphone's place)
 
     private var _c as Conversation;
+    private var _scroller as Scroller;
+    private var _commandsSeen as Number = 0;
 
-    function initialize(conversation as Conversation) {
+    function initialize(conversation as Conversation, scroller as Scroller) {
         View.initialize();
         _c = conversation;
+        _scroller = scroller;
     }
 
     function onShow() as Void {
@@ -30,8 +35,8 @@ class AssistView extends WatchUi.View {
         } else {
             drawConversationScreen(dc);
         }
-        if (_c.countdown > 0) {
-            drawCountdown(dc, _c.countdown);
+        if (_c.idle.countdown > 0) {
+            drawCountdown(dc, _c.idle.countdown);
         } else if (_c.popup.length() > 0) {
             drawPopup(dc, _c.popup);
         }
@@ -44,15 +49,16 @@ class AssistView extends WatchUi.View {
         var font = Graphics.FONT_XTINY;
         dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
         dc.drawText(w / 2, STATUS_Y * h, font, Settings.text(Rez.Strings.PairTitle), Graphics.TEXT_JUSTIFY_CENTER);
-        var code = _c.pairingCode;
+        var notice = _c.pairing.notice;
+        var code = _c.pairing.code;
         if (code.length() == 6) {
             dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
             dc.drawText(w / 2, h * 0.38, Graphics.FONT_NUMBER_MEDIUM, code.substring(0, 3) + " " + code.substring(3, 6),
                 Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
             drawLines(dc, Settings.text(Rez.Strings.PairConfirmInHa), font, h * 0.55);
-        } else if (_c.notice.equals(Settings.text(Rez.Strings.PairOpenInHa))) {
+        } else if (notice.equals(Settings.text(Rez.Strings.PairOpenInHa))) {
             // A short main line and a smaller hint where to find it, like pairing a TV
-            var main = Graphics.fitTextToArea(_c.notice, Graphics.FONT_TINY, w * 0.74, h * 0.3, true);
+            var main = Graphics.fitTextToArea(notice, Graphics.FONT_TINY, w * 0.74, h * 0.3, true);
             if (main != null) {
                 dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
                 dc.drawText(w / 2, h * 0.34, Graphics.FONT_TINY, main, Graphics.TEXT_JUSTIFY_CENTER);
@@ -61,8 +67,8 @@ class AssistView extends WatchUi.View {
             dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
             dc.drawText(w / 2, h * 0.62, font, Settings.text(Rez.Strings.PairOpenInHaHint), Graphics.TEXT_JUSTIFY_CENTER);
             drawButton(dc, Settings.text(Rez.Strings.PairAddWatchButton), font, h * 0.62 + dc.getFontHeight(font) + 4);
-        } else if (_c.notice.length() > 0) {
-            drawLines(dc, _c.notice, font, h * 0.35);
+        } else if (notice.length() > 0) {
+            drawLines(dc, notice, font, h * 0.35);
         }
     }
 
@@ -112,6 +118,11 @@ class AssistView extends WatchUi.View {
             status = Settings.text(Rez.Strings.StatusError);
             color = Graphics.COLOR_ORANGE;
         }
+        // While listening the watch shows its own microphone in the middle of the top: it is the
+        // recording light, so the status and the red dot are left out (photo on the fēnix 8)
+        if (c.state == STATE_LISTENING) {
+            status = "";
+        }
         if (status.length() > 0) {
             dc.setColor(color, Graphics.COLOR_TRANSPARENT);
             dc.drawText(w / 2, STATUS_Y * h, Graphics.FONT_XTINY, status, Graphics.TEXT_JUSTIFY_CENTER);
@@ -121,9 +132,10 @@ class AssistView extends WatchUi.View {
                     STATUS_Y * h + dc.getFontHeight(Graphics.FONT_XTINY) / 2, c.tick);
             }
         }
-        // The reply mode at a fixed place above the status, always shown (hold UP switches it)
+        // The reply mode, always shown at one fixed place right of the middle - the middle is where
+        // the watch shows its microphone while listening; hold UP switches it
         if (Capabilities.hasSpeaker()) {
-            drawSpeaker(dc, w / 2, ICON_Y * h, Settings.textOnly());
+            drawSpeaker(dc, w / 2 + SPEAKER_ASIDE, ICON_Y * h, Settings.textOnly());
         }
         // The START arc: pulsing while the app waits for START, steady where START may be pressed,
         // none where it does nothing. An empty idle screen also says what to do.
@@ -169,15 +181,23 @@ class AssistView extends WatchUi.View {
         } else if (c.reply.length() > 0) {
             items.add(Bubbles.textItem(dc, c.reply, font, false, Bubbles.REPLY_BUBBLE, Graphics.COLOR_WHITE));
         }
-        if (c.notice.length() > 0) {
-            items.add(Bubbles.noteItem(dc, c.notice, font));
-        }
         // A thin line between the status and the conversation; bubbles scroll under it
         var lineY = (STATUS_Y * h + dc.getFontHeight(Graphics.FONT_XTINY) + 4).toNumber();
         var half = Bubbles.chordHalf(dc, lineY) * 0.7;
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
         dc.drawLine(w / 2 - half, lineY, w / 2 + half, lineY);
-        c.scroll = Bubbles.drawConversation(dc, items, font, lineY + 6, h * 0.86, c.tick, c.scroll, anchor);
+        // A new command: back to it
+        if (c.commandCount != _commandsSeen) {
+            _commandsSeen = c.commandCount;
+            _scroller.reset();
+        }
+        _scroller.lineHeight = dc.getFontHeight(font);
+        _scroller.advance(System.getTimer());
+        _scroller.limitTo(Bubbles.drawConversation(dc, items, font, lineY + 6, h * 0.86, c.tick,
+            _scroller.scroll, anchor));
+        if (_scroller.gliding()) {
+            WatchUi.requestUpdate();
+        }
     }
 
     //! A framed note in the middle, over everything, like a system popup; wraps a longer text

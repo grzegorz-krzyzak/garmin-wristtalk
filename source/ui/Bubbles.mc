@@ -5,12 +5,11 @@ import Toybox.Math;
 enum ItemKind {
     ITEM_TEXT,
     ITEM_DOTS,
-    ITEM_NOTE,
     ITEM_DIVIDER
 }
 
 //! Drawing of the conversation: chat bubbles (commands blue on the right, replies grey on the left),
-//! "typing" dots, notes, the "new conversation" divider, the bezel scroll bar. Sizes and colours
+//! "typing" dots, the "new conversation" divider, the bezel scroll bar. Sizes and colours
 //! for the fēnix 8 Solar 51 mm (MIP, 64 colours); another screen family gets its own constants.
 module Bubbles {
 
@@ -25,17 +24,24 @@ module Bubbles {
     const DOTS_WIDTH = 56;
     const DOTS_HEIGHT = 24;
 
+    // Wrapped lines by font and text: wrapping every bubble on every frame was too slow to follow a
+    // finger dragging the conversation on the fēnix 8 (2026-11-04)
+    var _wrapped as Dictionary<String, Array<String>> = {} as Dictionary<String, Array<String>>;
+
     //! [kind, lines, right, fill, textColor]
     function textItem(dc as Dc, text as String, font as FontDefinition, right as Boolean, fill as Number,
             textColor as Number) as Array {
-        var wrapped = Graphics.fitTextToArea(text, font, dc.getWidth() * BUBBLE_TEXT, 10000, false);
-        return [ITEM_TEXT, split(wrapped != null ? wrapped : text), right, fill, textColor];
-    }
-
-    function noteItem(dc as Dc, text as String, font as FontDefinition) as Array {
-        var item = textItem(dc, text, font, false, 0, Graphics.COLOR_LT_GRAY);
-        item[0] = ITEM_NOTE;
-        return item;
+        var key = font.toString() + "|" + text;
+        var lines = _wrapped[key];
+        if (lines == null) {
+            if (_wrapped.size() > 40) {
+                _wrapped = {} as Dictionary<String, Array<String>>;
+            }
+            var wrapped = Graphics.fitTextToArea(text, font, dc.getWidth() * BUBBLE_TEXT, 10000, false);
+            lines = split(wrapped != null ? wrapped : text);
+            _wrapped[key] = lines;
+        }
+        return [ITEM_TEXT, lines, right, fill, textColor];
     }
 
     function dotsItem(right as Boolean, fill as Number) as Array {
@@ -58,7 +64,7 @@ module Bubbles {
     //! `anchor`) stands right under the line below the status and its reply below it - the reply
     //! arriving does not push the command out of sight. `scroll` is in lines
     //! from there: positive = back to earlier messages (UP), negative = further down a long reply
-    //! (DOWN). Returns the scroll clamped to what the conversation allows.
+    //! (DOWN), in pixels. Returns the scroll clamped to what the conversation allows.
     function drawConversation(dc as Dc, items as Array<Array>, font as FontDefinition, top as Numeric,
             bottom as Numeric, tick as Number, scroll as Number, anchor as Number) as Number {
         var tops = [] as Array<Number>;
@@ -70,20 +76,19 @@ module Bubbles {
         }
         var area = bottom - top;
         var overflow = total > area ? (total - area).toNumber() : 0;
-        var lineHeight = dc.getFontHeight(font);
         var base = anchor >= 0 && anchor < tops.size() ? tops[anchor] : overflow;
         if (base > overflow) {
             base = overflow;
         }
-        var maxBack = (base + lineHeight - 1) / lineHeight;
-        var maxForward = (overflow - base + lineHeight - 1) / lineHeight;
+        var maxBack = base;
+        var maxForward = overflow - base;
         if (scroll > maxBack) {
             scroll = maxBack;
         }
         if (scroll < -maxForward) {
             scroll = -maxForward;
         }
-        var offset = base - scroll * lineHeight;
+        var offset = base - scroll;
         if (offset < 0) {
             offset = 0;
         }
