@@ -1,5 +1,6 @@
 import Toybox.Attention;
 import Toybox.Audio;
+import Toybox.Graphics;
 import Toybox.Lang;
 import Toybox.System;
 
@@ -18,6 +19,14 @@ module Capabilities {
     //! Touch can be switched off on the watch, so this is asked while running
     function hasTouch() as Boolean {
         return System.getDeviceSettings().isTouchScreen;
+    }
+
+    //! Smooth edges for the arcs and round shapes where the watch can draw them (Connect IQ 3.2+);
+    //! without it the MIP screen shows every stair step
+    function smoothEdges(dc as Graphics.Dc) as Void {
+        if (dc has :setAntiAlias) {
+            dc.setAntiAlias(true);
+        }
     }
 
     function hasNoiseFilter() as Boolean {

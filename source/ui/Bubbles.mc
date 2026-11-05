@@ -5,11 +5,12 @@ import Toybox.Math;
 enum ItemKind {
     ITEM_TEXT,
     ITEM_DOTS,
+    ITEM_NOTE,
     ITEM_DIVIDER
 }
 
 //! Drawing of the conversation: chat bubbles (commands blue on the right, replies grey on the left),
-//! "typing" dots, the "new conversation" divider, the bezel scroll bar. Sizes and colours
+//! "typing" dots, a grey note, the "new conversation" divider, the bezel scroll bar. Sizes and colours
 //! for the fēnix 8 Solar 51 mm (MIP, 64 colours); another screen family gets its own constants.
 module Bubbles {
 
@@ -42,6 +43,13 @@ module Bubbles {
             _wrapped[key] = lines;
         }
         return [ITEM_TEXT, lines, right, fill, textColor];
+    }
+
+    //! A grey line of text without a bubble (a command that got no reply)
+    function noteItem(dc as Dc, text as String, font as FontDefinition) as Array {
+        var item = textItem(dc, text, font, false, 0, Graphics.COLOR_LT_GRAY);
+        item[0] = ITEM_NOTE;
+        return item;
     }
 
     function dotsItem(right as Boolean, fill as Number) as Array {
@@ -173,22 +181,30 @@ module Bubbles {
     }
 
     //! Garmin-style scroll bar on the left bezel (the right side is the START hint)
+    //! Where the visible part is, as a straight line - the watch's menus draw it so (a thin arc
+    //! showed every stair step on this screen)
     function drawScrollBar(dc as Dc, total as Number, area as Numeric, offset as Numeric) as Void {
-        var r = dc.getWidth() / 2;
-        var from = 215;  // degrees, 0 = 3 o'clock, counter-clockwise: the bottom of the bar
-        var span = 70;
-        dc.setPenWidth(3);
+        var shown = area.toFloat() / total;
+        drawScrollLine(dc, offset.toFloat() / total, shown);
+    }
+
+    //! A straight thin track with a thicker light thumb on it, left of the bubbles - as the
+    //! watch's menus draw it: a straight line has no stair steps
+    function drawScrollLine(dc as Dc, at as Float, shown as Float) as Void {
+        var w = dc.getWidth();
+        var h = dc.getHeight();
+        var x = (w * 0.09).toNumber();
+        var top = h * 0.27;
+        var length = h * 0.46;
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawArc(r, r, r - 4, Graphics.ARC_CLOCKWISE, from, from - span);
-        var thumb = span * area / total;
-        if (thumb < 8) {
-            thumb = 8;
+        dc.fillRectangle(x, top, 1, length);
+        var thumb = length * shown;
+        if (thumb < 12) {
+            thumb = 12;
         }
-        // offset 0 = the top of the conversation = the upper end of the bar (the smaller angle)
-        var start = from - span + (span - thumb) * (offset.toFloat() / (total - area));
+        var y = top + (length - thumb) * (shown < 1 ? at / (1 - shown) : 0);
         dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawArc(r, r, r - 4, Graphics.ARC_CLOCKWISE, (start + thumb).toNumber(), start.toNumber());
-        dc.setPenWidth(1);
+        dc.fillRectangle(x - 1, y, 3, thumb);
     }
 
     //! Half the width of the round screen at height y

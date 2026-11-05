@@ -23,7 +23,8 @@ class Recorder {
                     :frequency => Audio.FREQ_16_KHZ,
                     :channels => Audio.CHANNEL_MONO
                 },
-                // About 0.3 s of Opus per window
+                // The audio comes about once a second on the fēnix 8 whatever the window; 512 bytes only
+                // doubled the requests, and the phone lost some (measured 2026-11-05)
                 :windowSize => 1024,
                 :windowFilledBehavior => Audio.Capture.WINDOW_FILLED_CONTINUE
             };

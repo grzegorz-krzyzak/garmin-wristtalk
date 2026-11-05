@@ -11,8 +11,17 @@ enum State {
     STATE_LISTENING,
     STATE_RECOGNIZING,
     STATE_SENDING,
+    STATE_LOADING_VOICE,  // the reply text is on screen, its voice is on the way (2-4 s by phone)
     STATE_PLAYING,
     STATE_ERROR
+}
+
+//! What a popup says - the view picks its icon
+enum PopupKind {
+    POPUP_PAIRED,
+    POPUP_VOICE,
+    POPUP_TEXT_ONLY,
+    POPUP_NOT_HEARD
 }
 
 enum EntryKind {
@@ -28,21 +37,30 @@ class Conversation {
     const CONNECTING_SHOW_MS = 500;      // "Connecting…" only when the check takes longer than this,
     const CONNECTING_MIN_MS = 1000;      // and then on screen at least this long - no flash
     const CONNECTING_CAP_MS = 10000;     // no answer: a connection error
-    const NO_SPEECH_MS = 5000;           // from the first audio: nothing said -> "nothing heard"
+    const NO_SPEECH_MS = 12000;          // from the first audio: nothing said -> "nothing heard"; 5 s was
+                                         // too short through the phone (speech seen in HA at 5-7 s, 2026-11-05)
     const LISTEN_CAP_MS = 25000;         // the integration closes at 20 s; this only guards the watch
-    const MAX_FAILURES = 2;
-    const GIVE_UP_EXIT_MS = 5000;
+    const REST_WAIT_MS = 1500;           // after START: the microphone's last audio, then "final"
+    const CHUNK_TRIES = 3;               // a chunk lost on the way is sent again; after 3 tries an error
+    const CHUNK_ANSWER_MS = 10000;       // no answer by then: counted as lost (the phone path can keep
+                                         // a request without an answer, 2026-11-05)
+    const CHUNKS_IN_FLIGHT = 2;          // through the phone one chunk takes 1.5-3.5 s: the next one
+                                         // goes meanwhile (the integration takes them in any order)
     const CONVERSATION_TIMEOUT_MS = 300000;  // Home Assistant's chat session: 5 minutes
     const HISTORY_SIZE = 6;
     const TICK_MS = 100;
-    const PULSE_MS = 500;                // the START arc on an empty idle screen: a slow pulse
+    const PULSE_MS = 250;                // the START arc breathing while the app waits for START: one
+                                         // step of its width (the view's BREATH, 2 s there and back)
     const POPUP_MS = 1500;               // a confirmation; a problem stays until START or BACK
 
     var state as State = STATE_IDLE;
     var heard as String = "";
     var reply as String = "";
     var error as String = "";
+    //! Under the error, what to do: START to try again, the app closing, or "" (the message says it)
+    var errorHint as String = "";
     var popup as String = "";
+    var popupKind as PopupKind = POPUP_PAIRED;
     var connectingShown as Boolean = false;
     //! Idle with nothing in the conversation: the START arc pulses (ticks every PULSE_MS)
     var pulsing as Boolean = false;
@@ -56,14 +74,15 @@ class Conversation {
     private var _recorder as Recorder;
     private var _player as Player;
     private var _started as Boolean = false;
-    private var _failures as Number = 0;
     private var _lastCommandAt as Number?;
     // The current command
     private var _session as String = "";
     private var _audio as ByteArray = []b;
     private var _sent as Number = 0;
-    private var _chunkInFlight as Boolean = false;
+    private var _inFlight as Array<ChunkRequest> = [] as Array<ChunkRequest>;
     private var _finalPending as Boolean = false;
+    //! After START until the microphone has handed over all it holds (up to a second of speech)
+    private var _awaitingRest as Boolean = false;
     private var _speech as Boolean = false;
     private var _textOnly as Boolean = false;
     private var _connectingShownAt as Number = 0;
@@ -141,7 +160,7 @@ class Conversation {
 
     function onConnectingTimeout() as Void {
         if (state == STATE_CONNECTING) {
-            fail(Messages.describe(new Result(RESULT_TIMEOUT, 0, null)));
+            fail(Messages.describe(new Result(RESULT_TIMEOUT, 0, null)), true);
         }
     }
 
@@ -202,7 +221,7 @@ class Conversation {
         _lastCommandAt = null;
         state = STATE_IDLE;
         buzz(BUZZ_REPLY);
-        showPopup(Settings.text(Rez.Strings.PairDone), POPUP_MS);
+        showPopup(POPUP_PAIRED, Settings.text(Rez.Strings.PairDone), POPUP_MS);
         armIdleExit(Settings.idleExitMs());
     }
 
@@ -220,7 +239,7 @@ class Conversation {
             }
         } else if (state == STATE_LISTENING) {
             finishListening();
-        } else if (state == STATE_PLAYING) {
+        } else if (state == STATE_PLAYING || state == STATE_LOADING_VOICE) {
             _player.stop();
             listen();
         } else if (state == STATE_IDLE || state == STATE_ERROR) {
@@ -238,7 +257,7 @@ class Conversation {
             return true;
         }
         if (state == STATE_LISTENING || state == STATE_RECOGNIZING || state == STATE_SENDING
-                || state == STATE_PLAYING) {
+                || state == STATE_LOADING_VOICE || state == STATE_PLAYING) {
             stopCommand();
             state = STATE_IDLE;
             armIdleExit(Settings.idleExitMs());
@@ -248,19 +267,22 @@ class Conversation {
         return false;
     }
 
-    //! UP / DOWN or a drag during the countdown only keeps the app open (true); otherwise the view
-    //! scrolls the conversation
-    function inputKeepsOpen() as Boolean {
+    //! UP / DOWN or a drag: during the countdown it only keeps the app open (true); otherwise the
+    //! view scrolls the conversation, and reading counts as use - the idle time starts again
+    function onScrollInput() as Boolean {
         if (idle.countdown > 0) {
             keepOpen();
             return true;
+        }
+        if (state == STATE_IDLE || state == STATE_ERROR) {
+            idle.arm(Settings.idleExitMs());
         }
         return false;
     }
 
     //! Hold UP: "text only" on/off (also the setting in Garmin Connect)
     function toggleTextOnly() as Void {
-        if (inputKeepsOpen()) {
+        if (onScrollInput()) {
             return;
         }
         if (!Capabilities.hasSpeaker()) {
@@ -268,11 +290,12 @@ class Conversation {
         }
         var on = !Settings.textOnly();
         Settings.setTextOnly(on);
-        if (on && state == STATE_PLAYING) {
+        if (on && (state == STATE_PLAYING || state == STATE_LOADING_VOICE)) {
             _player.stop();
             done();
         }
-        showPopup(Settings.text(on ? Rez.Strings.ModeTextOnly : Rez.Strings.ModeVoiceText), POPUP_MS);
+        showPopup(on ? POPUP_TEXT_ONLY : POPUP_VOICE,
+            Settings.text(on ? Rez.Strings.ModeTextOnly : Rez.Strings.ModeVoiceText), POPUP_MS);
     }
 
     // --- a command ----------------------------------------------------------------------------
@@ -285,18 +308,20 @@ class Conversation {
         heard = "";
         reply = "";
         error = "";
+        errorHint = "";
         popup = "";
         commandCount++;
         _audio = []b;
         _sent = 0;
-        _chunkInFlight = false;
+        abandonChunks();
         _finalPending = false;
+        _awaitingRest = false;
         _speech = false;
         _textOnly = Settings.textOnly();
         _session = System.getTimer().format("%x") + Math.rand().format("%x");
         buzz(BUZZ_LISTEN);  // before the microphone opens - not in the recording
         if (!_recorder.start(method(:onAudioData), method(:onRecordingDone))) {
-            fail(Settings.text(Rez.Strings.ErrMicStart));
+            fail(Settings.text(Rez.Strings.ErrMicStart), true);
             return;
         }
         state = STATE_LISTENING;
@@ -327,6 +352,11 @@ class Conversation {
     }
 
     function onAudioData(data as ByteArray) as Void {
+        // What the microphone still hands over after the command is known stays on the watch:
+        // sent, it took the phone's bandwidth from the reply (seen 2026-11-05, up to 16 kB)
+        if (!takingAudio()) {
+            return;
+        }
         if (_audio.size() == 0) {
             waitThen(NO_SPEECH_MS, method(:onNoSpeech));
         }
@@ -336,26 +366,42 @@ class Conversation {
 
     function onRecordingDone(ok as Boolean) as Void {
         if (!ok && state == STATE_LISTENING) {
-            fail(Settings.text(Rez.Strings.ErrMicStopped));
+            fail(Settings.text(Rez.Strings.ErrMicStopped), true);
+        } else if (_awaitingRest && state == STATE_RECOGNIZING) {
+            sendFinal();
         }
     }
 
-    //! START or the watch's own cap: the rest of the audio goes with "final". "Recognising" at once:
-    //! the press shows, not only when the text comes back
+    //! START or the watch's own cap. "Recognising" at once - the press shows, not only when the text
+    //! comes back; "final" only once the microphone has handed over what it still holds: sent at
+    //! once, the last words were cut ("... jaki jest status" without "drukarki", 2026-11-05)
     function finishListening() as Void {
         if (state != STATE_LISTENING) {
             return;
         }
-        _recorder.stop();
         _finalPending = true;
+        _awaitingRest = true;
         state = STATE_RECOGNIZING;
         WatchUi.requestUpdate();
+        // The flags first: stopping may hand over the rest and report the end at once
+        waitThen(REST_WAIT_MS, method(:sendFinal));
+        _recorder.stop();
+    }
+
+    //! The microphone is done (or did not say so in time): the rest with "final"
+    function sendFinal() as Void {
+        if (!_awaitingRest || state != STATE_RECOGNIZING) {
+            return;
+        }
+        _awaitingRest = false;
+        _waitTimer.stop();
         sendChunk(true);
     }
 
-    //! One chunk request at a time; what comes meanwhile goes with the next one
+    //! Up to CHUNKS_IN_FLIGHT chunk requests at a time; what comes meanwhile goes with the next one.
+    //! "final" goes alone, after the others have arrived - the integration ends the input with it
     private function sendChunk(final as Boolean) as Void {
-        if (!takingAudio() || _chunkInFlight) {
+        if (!takingAudio() || _inFlight.size() >= (final ? 1 : CHUNKS_IN_FLIGHT)) {
             return;
         }
         if (_audio.size() <= _sent && !final) {
@@ -363,18 +409,65 @@ class Conversation {
         }
         var offset = _sent;
         _sent = _audio.size();
-        _chunkInFlight = true;
-        _client.sendChunk(_session, offset, _audio.slice(offset, _sent), _textOnly && offset == 0, final,
-            method(:onChunk));
+        send(new ChunkRequest(offset, _sent - offset, final, 1, method(:onChunk)));
     }
 
-    function onChunk(result as Result) as Void {
-        _chunkInFlight = false;
+    private function send(request as ChunkRequest) as Void {
+        _inFlight.add(request);
+        _client.sendChunk(_session, request.offset, _audio.slice(request.offset, request.offset + request.size),
+            _textOnly && request.offset == 0, request.final, request.method(:onResult));
+    }
+
+    //! A chunk that did not arrive goes again while tries are left; true when it went
+    private function resend(request as ChunkRequest) as Boolean {
+        if (request.tries >= CHUNK_TRIES) {
+            return false;
+        }
+        send(request.next());
+        return true;
+    }
+
+    //! Lost on the way through the phone - not refused by Home Assistant. Not "no phone": that
+    //! answer comes at once (0.02 s, measured) and stays until Bluetooth is back
+    private function lost(result as Result) as Boolean {
+        return result.kind == RESULT_TIMEOUT || result.kind == RESULT_ERROR;
+    }
+
+    //! A chunk request without an answer for CHUNK_ANSWER_MS counts as lost (from the ticks while
+    //! listening; `now` from the caller, so the tests need not wait)
+    function checkChunks(now as Number) as Void {
+        if (!takingAudio()) {
+            return;
+        }
+        for (var i = 0; i < _inFlight.size(); i++) {
+            var request = _inFlight[i];
+            if (now - request.sentAt > CHUNK_ANSWER_MS) {
+                request.abandoned = true;
+                _inFlight.remove(request);
+                if (!resend(request)) {
+                    fail(Messages.describe(new Result(RESULT_TIMEOUT, 0, null)), true);
+                }
+                return;
+            }
+        }
+    }
+
+    private function abandonChunks() as Void {
+        for (var i = 0; i < _inFlight.size(); i++) {
+            _inFlight[i].abandoned = true;
+        }
+        _inFlight = [] as Array<ChunkRequest>;
+    }
+
+    function onChunk(request as ChunkRequest, result as Result) as Void {
+        _inFlight.remove(request);
         if (!takingAudio()) {
             return;
         }
         if (!result.ok()) {
-            failRequest(result);
+            if (!(lost(result) && resend(request))) {
+                failRequest(result);
+            }
             return;
         }
         if (result.flag("speech")) {
@@ -383,14 +476,15 @@ class Conversation {
         var answer = result.text("state");
         if (answer.equals("heard")) {
             heard = result.text("heard");
+            // The state first: stopping the microphone hands over what it still holds
+            state = STATE_SENDING;
             _recorder.stop();
             _waitTimer.stop();
             buzz(BUZZ_SENT);
-            state = STATE_SENDING;
             _client.reply(_session, method(:onReply));
         } else if (answer.equals("nothing")) {
             notHeard();
-        } else if (_finalPending) {
+        } else if (_finalPending && !_awaitingRest) {
             sendChunk(true);
         } else {
             sendChunk(false);
@@ -421,12 +515,12 @@ class Conversation {
             notHeard();
             return;
         }
-        _failures = 0;
         reply = result.text("reply");
         stopTicks();
         buzz(BUZZ_REPLY);
         WatchUi.requestUpdate();
         if (result.flag("audio") && !Settings.textOnly()) {
+            state = STATE_LOADING_VOICE;
             _client.audio(_session, method(:onAudio));
         } else {
             done();
@@ -434,13 +528,17 @@ class Conversation {
     }
 
     function onAudio(result as Result) as Void {
-        if (state != STATE_SENDING) {
+        if (state != STATE_LOADING_VOICE) {
             return;
         }
         if (result.kind == RESULT_UNAUTHORIZED) {
             // The watch was removed meanwhile: pair now, or the next START would open the
             // microphone only to be refused
             reconnect();
+            return;
+        }
+        if (result.kind == RESULT_WAITING) {
+            _client.audio(_session, method(:onAudio));
             return;
         }
         // Any other failure: the reply text is on screen already - only the voice is missing
@@ -460,6 +558,7 @@ class Conversation {
     }
 
     private function stopCommand() as Void {
+        abandonChunks();
         _waitTimer.stop();
         _recorder.stop();
         _player.stop();
@@ -486,7 +585,7 @@ class Conversation {
         state = STATE_IDLE;
         // A popup, not a note in the conversation, where it would fall below the anchored command,
         // out of sight; it stays until START (which listens again) or BACK
-        showPopup(Settings.text(Rez.Strings.NotHeard), 0);
+        showPopup(POPUP_NOT_HEARD, Settings.text(Rez.Strings.NotHeard), 0);
         armIdleExit(Settings.idleExitMs());
         WatchUi.requestUpdate();
     }
@@ -496,22 +595,18 @@ class Conversation {
             reconnect();
             return;
         }
-        fail(Messages.describe(result));
+        fail(Messages.describe(result), Messages.retryHelps(result));
     }
 
-    //! After MAX_FAILURES in a row retrying will not help - give up
-    private function fail(message as String) as Void {
-        _failures++;
+    //! The app stays open after any number of errors - the idle countdown closes it, as always
+    //! (closing by itself after two errors came before the message could be read, 2026-11-05)
+    private function fail(message as String, retryHelps as Boolean) as Void {
         stopCommand();
         buzz(BUZZ_ERROR);
         state = STATE_ERROR;
-        if (_failures >= MAX_FAILURES) {
-            error = message + " " + Settings.text(Rez.Strings.GiveUp);
-            closeAfter(GIVE_UP_EXIT_MS);
-        } else {
-            error = message;
-            armIdleExit(Settings.idleExitMs());
-        }
+        error = message;
+        errorHint = retryHelps ? Settings.text(Rez.Strings.StartToRetry) : "";
+        armIdleExit(Settings.idleExitMs());
         WatchUi.requestUpdate();
     }
 
@@ -537,10 +632,6 @@ class Conversation {
     private function keepOpen() as Void {
         armIdleExit(Settings.idleExitMs());
         WatchUi.requestUpdate();
-    }
-
-    private function closeAfter(ms as Number) as Void {
-        idle.closeAfter(ms);
     }
 
     //! Vibration cues by the "vibration" setting: 0 full, 1 minimal (reply, error, the countdown -
@@ -615,6 +706,7 @@ class Conversation {
 
     function onTick() as Void {
         tick++;
+        checkChunks(System.getTimer());
         if (popup.length() > 0 && _popupUntil > 0 && System.getTimer() >= _popupUntil) {
             popup = "";
             if (!_animating) {
@@ -631,7 +723,8 @@ class Conversation {
     }
 
     //! A small framed note in the middle for `ms`, or until dismissed when `ms` is 0
-    private function showPopup(text as String, ms as Number) as Void {
+    private function showPopup(kind as PopupKind, text as String, ms as Number) as Void {
+        popupKind = kind;
         popup = text;
         _popupUntil = ms > 0 ? System.getTimer() + ms : 0;
         if (ms > 0) {

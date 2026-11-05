@@ -38,7 +38,7 @@ MC
 case "${1:-dev}" in
     dev|run)
         dev_config
-        "$SDK/bin/monkeyc" -f "monkey.jungle;dev.jungle" -d "$DEVICE" -o bin/wristtalk.prg -y "$KEY" -l 2 -w
+        "$SDK/bin/monkeyc" -f "monkey.jungle;dev.jungle" -d "$DEVICE" -o bin/wristtalk.prg -y "$KEY" -l 3 -w
         if [ "${1:-dev}" = run ]; then
             pgrep -f "MacOS/simulator" >/dev/null || { open "$SDK/bin/ConnectIQ.app"; sleep 6; }
             "$SDK/bin/monkeydo" bin/wristtalk.prg "$DEVICE"
@@ -48,7 +48,7 @@ case "${1:-dev}" in
         dev_config 0
         # The name the watch keeps: copying it over the old file leaves one WristTalk in GARMIN/APPS
         mkdir -p bin/device
-        "$SDK/bin/monkeyc" -f "monkey.jungle;dev.jungle" -d "$DEVICE" -o bin/device/WRISTTALK.PRG -y "$KEY" -l 2 -w
+        "$SDK/bin/monkeyc" -f "monkey.jungle;dev.jungle" -d "$DEVICE" -o bin/device/WRISTTALK.PRG -y "$KEY" -l 3 -w
         echo "bin/device/WRISTTALK.PRG - copy it to GARMIN/APPS on the watch, over the old WRISTTALK.PRG"
         ;;
     start)

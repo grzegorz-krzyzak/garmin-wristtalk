@@ -1,4 +1,5 @@
 import Toybox.Application;
+import Toybox.Communications;
 import Toybox.Lang;
 import Toybox.System;
 import Toybox.Test;
@@ -11,7 +12,8 @@ import Toybox.WatchUi;
 class FakeClient extends HaClient {
 
     var calls as Array<String> = [] as Array<String>;
-    var last as Method(result as Result) as Void or Null;
+    //! The callbacks of the requests not answered yet, oldest first
+    var pending as Array<Method(result as Result) as Void> = [] as Array<Method(result as Result) as Void>;
     var lastChunk as Array = [];
 
     function initialize() {
@@ -20,40 +22,40 @@ class FakeClient extends HaClient {
 
     function pair(info as Dictionary<Object, Object>, done as Method(result as Result) as Void) as Void {
         calls.add("pair");
-        last = done;
+        pending.add(done);
     }
 
     function pollPairing(pairId as String, done as Method(result as Result) as Void) as Void {
         calls.add("poll:" + pairId);
-        last = done;
+        pending.add(done);
     }
 
     function ping(done as Method(result as Result) as Void) as Void {
         calls.add("ping");
-        last = done;
+        pending.add(done);
     }
 
     function sendChunk(session as String, offset as Number, audio as ByteArray, textOnly as Boolean,
             final as Boolean, done as Method(result as Result) as Void) as Void {
         calls.add("chunk");
         lastChunk = [offset, audio.size(), textOnly, final];
-        last = done;
+        pending.add(done);
     }
 
     function reply(session as String, done as Method(result as Result) as Void) as Void {
         calls.add("reply");
-        last = done;
+        pending.add(done);
     }
 
     function audio(session as String, done as Method(result as Result) as Void) as Void {
         calls.add("audio");
-        last = done;
+        pending.add(done);
     }
 
     function answer(kind as ResultKind, code as Number, data as Dictionary or ByteArray or Null) as Void {
-        var done = last;
-        last = null;
-        (done as Method(result as Result) as Void).invoke(new Result(kind, code, data));
+        var done = pending[0];
+        pending = pending.slice(1, null);
+        done.invoke(new Result(kind, code, data));
     }
 }
 
@@ -61,6 +63,12 @@ class FakeClient extends HaClient {
 class FakeRecorder extends Recorder {
 
     var started as Boolean = false;
+    //! What the microphone still holds when it is stopped (handed over on stop, as on the watch)
+    var rest as ByteArray = []b;
+    private var _onData as Method(data as ByteArray) as Void or Null;
+    private var _onDone as Method(ok as Boolean) as Void or Null;
+    //! false: the microphone does not report its end (the app falls back after a moment)
+    var reportsDone as Boolean = true;
 
     function initialize() {
         Recorder.initialize();
@@ -68,11 +76,22 @@ class FakeRecorder extends Recorder {
 
     function start(onData as Method(data as ByteArray) as Void, onDone as Method(ok as Boolean) as Void) as Boolean {
         started = true;
+        _onData = onData;
+        _onDone = onDone;
         return true;
     }
 
+    //! As on the watch: what the microphone still holds comes after the stop, then its end
     function stop() as Void {
+        var wasStarted = started;
         started = false;
+        if (wasStarted && rest.size() > 0) {
+            (_onData as Method(data as ByteArray) as Void).invoke(rest);
+            rest = []b;
+        }
+        if (wasStarted && reportsDone) {
+            (_onDone as Method(ok as Boolean) as Void).invoke(true);
+        }
     }
 }
 
@@ -449,7 +468,7 @@ function anEmptyIdleScreenPulsesUntilStart(logger as Test.Logger) as Boolean {
 }
 
 (:test)
-function twoConnectionErrorsGiveUp(logger as Test.Logger) as Boolean {
+function errorsInARowKeepTheAppOpen(logger as Test.Logger) as Boolean {
     var t = ConversationTests.setUp(true);
     var c = t[0] as Conversation;
     var client = t[1] as FakeClient;
@@ -459,7 +478,11 @@ function twoConnectionErrorsGiveUp(logger as Test.Logger) as Boolean {
     c.onSelect();
     c.onAudioData([1]b);
     client.answer(RESULT_NO_PHONE, -104, null);
-    Test.assertEqual(c.error, Settings.text(Rez.Strings.ErrNoPhone) + " " + Settings.text(Rez.Strings.GiveUp));
+    Test.assertEqual(c.error, Settings.text(Rez.Strings.ErrNoPhone));
+    Test.assertEqual(c.errorHint, Settings.text(Rez.Strings.StartToRetry));
+    // START still tries again
+    c.onSelect();
+    Test.assertEqual(c.state, STATE_LISTENING);
     ConversationTests.tearDown(c);
     return true;
 }
@@ -535,5 +558,246 @@ function theScrollerGlidesAndStopsAtTheEnd(logger as Test.Logger) as Boolean {
     Test.assert(!s.advance(System.getTimer() + 100));
     s.reset();
     Test.assertEqual(s.scroll, 0);
+    return true;
+}
+
+(:test)
+function theRestOfTheRecordingStaysOnTheWatchAfterHeard(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    var recorder = t[2] as FakeRecorder;
+    ConversationTests.open(c, client);
+    c.onAudioData([1, 2, 3]b);
+    recorder.rest = [4, 5, 6, 7]b;
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    Test.assertEqual(c.state, STATE_SENDING);
+    // Only the reply poll went out after "heard", no chunk with the rest
+    Test.assertEqual(client.calls[client.calls.size() - 1], "reply");
+    Test.assertEqual(client.calls.indexOf("chunk"), client.calls.size() - 2);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function twoChunksTravelAtOnceAndFinalGoesAlone(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1, 2]b);
+    c.onAudioData([3, 4]b);
+    Test.assertEqual(client.pending.size(), 2);
+    Test.assertEqual(client.lastChunk[0], 2);
+    // A third waits for one of them
+    c.onAudioData([5]b);
+    Test.assertEqual(client.pending.size(), 2);
+    // START: "final" waits until nothing is on the way, then takes the rest
+    c.onSelect();
+    Test.assertEqual(c.state, STATE_RECOGNIZING);
+    Test.assertEqual(client.pending.size(), 2);
+    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
+    Test.assertEqual(client.pending.size(), 1);
+    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
+    // Arrays compare by reference in Monkey C: field by field
+    Test.assertEqual(client.lastChunk[0], 4);
+    Test.assertEqual(client.lastChunk[1], 1);
+    Test.assertEqual(client.lastChunk[3], true);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    Test.assertEqual(c.state, STATE_SENDING);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function scrollingRestartsTheIdleTime(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    Application.Properties.setValue("listenOnOpen", false);
+    var c = t[0] as Conversation;
+    c.startOnce();
+    c.idle.armedAt = 0;
+    Test.assert(!c.onScrollInput());
+    Test.assert(c.idle.armedAt > 0);
+    // During the countdown a scroll only keeps the app open
+    c.idle.onWarning();
+    Test.assert(c.onScrollInput());
+    Test.assertEqual(c.idle.countdown, 0);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function onlyATimeoutIsSentAgainAndOnce(logger as Test.Logger) as Boolean {
+    Test.assert(PendingRequest.shouldRetry(Communications.NETWORK_REQUEST_TIMED_OUT, 1));
+    Test.assert(!PendingRequest.shouldRetry(Communications.NETWORK_REQUEST_TIMED_OUT, 0));
+    Test.assert(!PendingRequest.shouldRetry(Communications.BLE_CONNECTION_UNAVAILABLE, 1));
+    Test.assert(!PendingRequest.shouldRetry(401, 1));
+    return true;
+}
+
+(:test)
+function theVoiceIsAskedForAgainWhileItIsMade(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    client.answer(RESULT_OK, 200, { "reply" => "b", "audio" => true });
+    client.answer(RESULT_WAITING, 202, null);
+    Test.assertEqual(client.calls[client.calls.size() - 1], "audio");
+    Test.assertEqual(c.state, STATE_LOADING_VOICE);
+    client.answer(RESULT_OK, 200, [9, 9]b);
+    Test.assertEqual(c.state, STATE_PLAYING);
+    Test.assertEqual(HaClient.classify(202, null), RESULT_WAITING);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aLostChunkIsSentAgain(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1, 2]b);
+    // Lost on the phone (code 0): the same chunk again, the command goes on
+    client.answer(RESULT_ERROR, 0, null);
+    Test.assertEqual(c.state, STATE_LISTENING);
+    Test.assertEqual(client.lastChunk[0], 0);
+    Test.assertEqual(client.lastChunk[1], 2);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    Test.assertEqual(c.state, STATE_SENDING);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aChunkLostThreeTimesIsAConnectionError(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_ERROR, 0, null);
+    client.answer(RESULT_TIMEOUT, -300, null);
+    Test.assertEqual(c.state, STATE_LISTENING);
+    client.answer(RESULT_ERROR, 0, null);
+    Test.assertEqual(c.state, STATE_ERROR);
+    Test.assertEqual(c.error, Lang.format(Settings.text(Rez.Strings.ErrConnection), [0]));
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aChunkWithoutAnAnswerIsSentAgainAndItsLateAnswerIgnored(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1, 2, 3]b);
+    var chunks = client.calls.size();
+    c.checkChunks(System.getTimer() + 5000);
+    Test.assertEqual(client.calls.size(), chunks);
+    // No answer for more than 10 s: counted as lost, the same chunk again
+    c.checkChunks(System.getTimer() + 11000);
+    Test.assertEqual(client.calls.size(), chunks + 1);
+    Test.assertEqual(client.lastChunk[0], 0);
+    // The first try answers late: ignored; the new try's answer counts
+    client.answer(RESULT_OK, 200, { "state" => "nothing" });
+    Test.assertEqual(c.state, STATE_LISTENING);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    Test.assertEqual(c.state, STATE_SENDING);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function startSendsFinalWithTheLastWords(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    var recorder = t[2] as FakeRecorder;
+    ConversationTests.open(c, client);
+    c.onAudioData([1, 2]b);
+    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
+    // START while the microphone still holds the last word
+    recorder.rest = [3, 4, 5]b;
+    c.onSelect();
+    Test.assertEqual(c.state, STATE_RECOGNIZING);
+    // The rest went on its way first; "final" follows once nothing else is on the way
+    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
+    Test.assertEqual(client.lastChunk[3], true);
+    var sent = client.lastChunk[0] + client.lastChunk[1];
+    Test.assertEqual(sent, 5);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function finalGoesEvenWhenTheMicrophoneDoesNotReportItsEnd(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    var recorder = t[2] as FakeRecorder;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
+    recorder.reportsDone = false;
+    var calls = client.calls.size();
+    c.onSelect();
+    Test.assertEqual(client.calls.size(), calls);
+    // After REST_WAIT_MS (the timer, called here)
+    c.sendFinal();
+    Test.assertEqual(client.lastChunk[3], true);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function loadingVoiceOnlyWhenTheVoiceComes(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    Test.assertEqual(c.state, STATE_SENDING);
+    client.answer(RESULT_OK, 200, { "reply" => "b", "audio" => true });
+    Test.assertEqual(c.state, STATE_LOADING_VOICE);
+    // START while the voice is on its way: the next command
+    c.onSelect();
+    Test.assertEqual(c.state, STATE_LISTENING);
+    // The voice of the earlier reply answers late: ignored
+    client.answer(RESULT_OK, 200, [9]b);
+    Test.assertEqual(c.state, STATE_LISTENING);
+    // No audio from Home Assistant: straight to idle, no "loading voice"
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "c" });
+    client.answer(RESULT_OK, 200, { "reply" => "d", "audio" => false });
+    Test.assertEqual(c.state, STATE_IDLE);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function anErrorSaysWhetherStartHelps(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_NO_PHONE, -104, null);
+    Test.assertEqual(c.errorHint, Settings.text(Rez.Strings.StartToRetry));
+    ConversationTests.tearDown(c);
+    t = ConversationTests.setUp(true);
+    c = t[0] as Conversation;
+    client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_UPDATE_INTEGRATION, 501, null);
+    Test.assertEqual(c.error, Settings.text(Rez.Strings.ErrUpdateIntegration));
+    Test.assertEqual(c.errorHint, "");
+    ConversationTests.tearDown(c);
     return true;
 }

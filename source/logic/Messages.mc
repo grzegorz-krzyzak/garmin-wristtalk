@@ -21,4 +21,11 @@ module Messages {
         }
         return Lang.format(Settings.text(Rez.Strings.ErrConnection), [result.code]);
     }
+
+    //! Whether START helps; not when something is to be done elsewhere (an update, the address,
+    //! speech-to-text in Home Assistant) - the message says what
+    function retryHelps(result as Result) as Boolean {
+        return result.kind != RESULT_UPDATE_APP && result.kind != RESULT_UPDATE_INTEGRATION
+            && result.kind != RESULT_HTTPS && result.kind != RESULT_NO_ADDRESS && result.kind != RESULT_STT_FAILED;
+    }
 }

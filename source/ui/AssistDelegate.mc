@@ -66,7 +66,7 @@ class AssistDelegate extends WatchUi.BehaviorDelegate {
             if (dt > 0) {
                 _dragV = 0.6 * _dragV + 0.4 * (dy * 1000.0 / dt);
             }
-            if (!_session.inputKeepsOpen()) {
+            if (!_session.onScrollInput()) {
                 _scroller.drag(dy);
             }
         } else {
@@ -98,7 +98,7 @@ class AssistDelegate extends WatchUi.BehaviorDelegate {
     //! DOWN further into a long reply, UP back to earlier messages; a swipe right after a drag is
     //! the same finger - the drag has scrolled already
     private function scrollLines(count as Number) as Void {
-        if (!dragged() && !_session.inputKeepsOpen()) {
+        if (!dragged() && !_session.onScrollInput()) {
             _scroller.lines(count);
         }
     }
