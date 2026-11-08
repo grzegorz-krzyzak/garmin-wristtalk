@@ -811,7 +811,7 @@ function theRestOfTheRecordingStaysOnTheWatchAfterHeard(logger as Test.Logger) a
 }
 
 (:test)
-function twoChunksTravelAtOnceAndFinalGoesAlone(logger as Test.Logger) as Boolean {
+function twoChunksTravelAtOnceAndFinalDoesNotWaitForThem(logger as Test.Logger) as Boolean {
     var t = ConversationTests.setUp(true);
     var c = t[0] as Conversation;
     var client = t[1] as FakeClient;
@@ -823,19 +823,41 @@ function twoChunksTravelAtOnceAndFinalGoesAlone(logger as Test.Logger) as Boolea
     // A third waits for one of them
     c.onAudioData([5]b);
     Test.assertEqual(client.pending.size(), 2);
-    // START: "final" waits until nothing is on the way, then takes the rest
+    // START: "final" takes the rest at once, past the two on the way (protocol 4)
     c.onSelect();
     Test.assertEqual(c.state, STATE_RECOGNIZING);
-    Test.assertEqual(client.pending.size(), 2);
-    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
-    Test.assertEqual(client.pending.size(), 1);
-    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
+    Test.assertEqual(client.pending.size(), 3);
     // Arrays compare by reference in Monkey C: field by field
     Test.assertEqual(client.lastChunk[0], 4);
     Test.assertEqual(client.lastChunk[1], 1);
     Test.assertEqual(client.lastChunk[3], true);
+    // The answers to the earlier chunks send no second "final"
+    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
+    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
+    Test.assertEqual(client.pending.size(), 1);
+    Test.assertEqual(client.calls.size(), 4);  // ping, two chunks, final
     client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
     Test.assertEqual(c.state, STATE_SENDING);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aChunkLostAfterFinalIsSentAgain(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1, 2]b);
+    c.onSelect();
+    Test.assertEqual(client.pending.size(), 2);
+    Test.assertEqual(client.lastChunk[3], true);
+    // The chunk before "final" is lost on the way: it goes again, "final" stays on its way
+    client.answer(RESULT_TIMEOUT, -2, null);
+    Test.assertEqual(client.calls[client.calls.size() - 1], "chunk");
+    Test.assertEqual(client.lastChunk[0], 0);
+    Test.assertEqual(client.lastChunk[3], false);
+    Test.assertEqual(client.pending.size(), 2);
     ConversationTests.tearDown(c);
     return true;
 }

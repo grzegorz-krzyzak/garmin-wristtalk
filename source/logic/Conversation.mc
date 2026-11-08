@@ -469,9 +469,10 @@ class Conversation {
     }
 
     //! Up to CHUNKS_IN_FLIGHT chunk requests at a time; what comes meanwhile goes with the next one.
-    //! "final" goes alone, after the others have arrived - the integration ends the input with it
+    //! "final" goes as soon as the microphone is done, past the chunks still on their way - the
+    //! integration closes the input once everything up to its end is in (protocol 4); one at a time
     private function sendChunk(final as Boolean) as Void {
-        if (!takingAudio() || _inFlight.size() >= (final ? 1 : CHUNKS_IN_FLIGHT)) {
+        if (!takingAudio() || (final ? finalInFlight() : _inFlight.size() >= CHUNKS_IN_FLIGHT)) {
             return;
         }
         if (_audio.size() <= _sent && !final) {
@@ -480,6 +481,15 @@ class Conversation {
         var offset = _sent;
         _sent = _audio.size();
         send(new ChunkRequest(offset, _sent - offset, final, 1, method(:onChunk)));
+    }
+
+    private function finalInFlight() as Boolean {
+        for (var i = 0; i < _inFlight.size(); i++) {
+            if (_inFlight[i].final) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function send(request as ChunkRequest) as Void {

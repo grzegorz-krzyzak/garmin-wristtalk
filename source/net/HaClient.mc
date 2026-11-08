@@ -58,7 +58,7 @@ class HaClient {
     // Raised with the integration on every change one side sends or expects (the table: the
     // integration's design notes); 2: waits within 4 s, audio 202, a timed-out request repeated;
     // 3: POST repair - "Pair again" from the menu
-    const PROTOCOL = "3";
+    const PROTOCOL = "4";
     const API = "/api/wristtalk/v1/";
 
     private var _app as String;
