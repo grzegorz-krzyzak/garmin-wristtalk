@@ -138,38 +138,36 @@ class AssistView extends WatchUi.View {
         var status = "";
         var color = Graphics.COLOR_LT_GRAY;
         var hint = true;
-        if (c.state == STATE_CONNECTING) {
-            status = c.connectingShown ? Settings.text(Rez.Strings.StatusConnecting) : "";
+        // What the screen shows of the state (ShownState): a waiting state without its look yet
+        // shows its content only - "Recognising" not yet shown still looks like listening
+        var s = c.shown.state;
+        var revealed = c.shown.revealed;
+        if (s == STATE_RECOGNIZING && !revealed) {
+            s = STATE_LISTENING;
+            revealed = true;
+        }
+        if (s == STATE_CONNECTING) {
+            status = revealed ? Settings.text(Rez.Strings.StatusConnecting) : "";
             hint = false;
-        } else if (c.state == STATE_LISTENING) {
-            status = Settings.text(Rez.Strings.StatusListening);
-        } else if (c.state == STATE_RECOGNIZING) {
+        } else if (s == STATE_RECOGNIZING) {
             status = Settings.text(Rez.Strings.StatusRecognizing);
             hint = false;
-        } else if (c.state == STATE_SENDING) {
-            status = Settings.text(Rez.Strings.StatusThinking);
+        } else if (s == STATE_SENDING) {
+            status = revealed ? Settings.text(Rez.Strings.StatusThinking) : "";
             hint = false;
-        } else if (c.state == STATE_LOADING_VOICE) {
-            status = Settings.text(Rez.Strings.StatusLoadingVoice);
-        } else if (c.state == STATE_PLAYING) {
+        } else if (s == STATE_LOADING_VOICE) {
+            status = revealed ? Settings.text(Rez.Strings.StatusLoadingVoice) : "";
+        } else if (s == STATE_PLAYING) {
             status = Settings.text(Rez.Strings.StatusReplying);
-        } else if (c.state == STATE_ERROR) {
+        } else if (s == STATE_ERROR) {
             status = Settings.text(Rez.Strings.StatusError);
             color = Graphics.COLOR_ORANGE;
         }
         // While listening the watch shows its own microphone in the middle of the top: it is the
-        // recording light, so the status and the red dot are left out (photo on the fēnix 8)
-        if (c.state == STATE_LISTENING) {
-            status = "";
-        }
+        // recording light, so there is no status
         if (status.length() > 0) {
             dc.setColor(color, Graphics.COLOR_TRANSPARENT);
             dc.drawText(w / 2, STATUS_Y * h, Graphics.FONT_XTINY, status, Graphics.TEXT_JUSTIFY_CENTER);
-            if (c.state == STATE_LISTENING) {
-                var textWidth = dc.getTextWidthInPixels(status, Graphics.FONT_XTINY);
-                drawRecordingDot(dc, w / 2 - textWidth / 2 - 10,
-                    STATUS_Y * h + dc.getFontHeight(Graphics.FONT_XTINY) / 2, c.tick);
-            }
         }
         // The reply mode, always at one place: in the middle above the status line (and above the
         // watch's own microphone while listening); hold UP switches it
@@ -178,7 +176,7 @@ class AssistView extends WatchUi.View {
         }
         // The START arc: pulsing while the app waits for START, steady where START may be pressed,
         // none where it does nothing. An empty idle screen also says what to do.
-        var empty = c.state == STATE_IDLE && c.isEmpty();
+        var empty = s == STATE_IDLE && c.isEmpty();
         if (hint) {
             var breathing = c.waitingForStart() && c.pulsing;
             drawStartHint(dc, Graphics.COLOR_LT_GRAY, breathing ? BREATH[c.tick % BREATH.size()] as Number : 5);
@@ -208,31 +206,36 @@ class AssistView extends WatchUi.View {
                     Graphics.COLOR_WHITE));
             }
         }
-        if (c.heard.length() > 0) {
+        var taking = s == STATE_LISTENING || s == STATE_RECOGNIZING;
+        if (c.heard.length() > 0 && !taking) {
             anchor = items.size();
             items.add(Bubbles.textItem(dc, c.heard, font, true, Bubbles.COMMAND_BUBBLE, Graphics.COLOR_WHITE));
-        } else if (c.state == STATE_LISTENING || c.state == STATE_RECOGNIZING) {
+        } else if (taking) {
             // Blue "typing" dots where the command will appear: the voice is being taken in; while
             // it is recognised the three pulse together (listening and recognising looked the
             // same). Grey dots stay for the agent answering
             anchor = items.size();
-            items.add(Bubbles.dotsItem(true, Bubbles.COMMAND_BUBBLE, c.state == STATE_RECOGNIZING));
+            items.add(Bubbles.dotsItem(true, Bubbles.COMMAND_BUBBLE, s == STATE_RECOGNIZING));
         }
-        if (c.state == STATE_SENDING && c.reply.length() == 0) {
-            items.add(Bubbles.dotsItem(false, Bubbles.REPLY_BUBBLE, false));
-        } else if (c.reply.length() > 0 && c.state != STATE_ERROR) {
+        if (s == STATE_SENDING) {
+            // The reply waits for "Thinking" to have stayed its minimum
+            if (revealed) {
+                items.add(Bubbles.dotsItem(false, Bubbles.REPLY_BUBBLE, false));
+            }
+        } else if (c.reply.length() > 0 && s != STATE_ERROR && !taking) {
             items.add(Bubbles.textItem(dc, c.reply, font, false, Bubbles.REPLY_BUBBLE, Graphics.COLOR_WHITE));
         }
         // Bubbles scroll under the line
         var lineY = drawHeaderLine(dc);
         // An error: like a system screen in the middle, not a reply bubble (orange on grey read
         // pink on purple on this screen, and it looked as if the assistant said it)
-        if (c.state == STATE_ERROR) {
+        if (s == STATE_ERROR) {
             drawNotice(dc, lineY, NOTICE_ERROR, c.error, c.errorHint);
             return;
         }
-        // A popup the same way, in place of the bubbles - not a framed box over them
-        if (c.popup.length() > 0) {
+        // A popup the same way, in place of the bubbles - not a framed box over them; once the
+        // screen has caught up with the state (it follows a waiting look's minimum too)
+        if (c.popup.length() > 0 && c.shown.settled()) {
             var kind = c.popupKind;
             drawNotice(dc, lineY,
                 kind == POPUP_PAIRED ? NOTICE_DONE : kind == POPUP_NOT_HEARD ? NOTICE_QUESTION

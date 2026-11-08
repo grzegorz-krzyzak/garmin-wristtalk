@@ -565,7 +565,7 @@ function aRemovedWatchPairsWithoutListening(logger as Test.Logger) as Boolean {
     var client = t[1] as FakeClient;
     c.startOnce();
     Test.assertEqual(c.state, STATE_CONNECTING);
-    Test.assert(!c.connectingShown);
+    Test.assert(!c.shown.revealed);
     client.answer(RESULT_UNAUTHORIZED, 401, { "error" => "unauthorized" });
     Test.assertEqual(c.state, STATE_PAIRING);
     Test.assert(!(t[2] as FakeRecorder).started);
@@ -1076,7 +1076,7 @@ function aKeyFoundAtTheSecondReadStartsAsUsual(logger as Test.Logger) as Boolean
     c.startOnce();
     // Nothing yet: no pairing, no request, nothing on screen
     Test.assertEqual(c.state, STATE_CONNECTING);
-    Test.assert(!c.connectingShown);
+    Test.assert(!c.shown.revealed);
     Test.assertEqual(client.calls.size(), 0);
     Settings.setKey("k1");
     c.onKeyReread();
@@ -1096,6 +1096,72 @@ function noKeyAtTheSecondReadPairs(logger as Test.Logger) as Boolean {
     c.onKeyReread();
     Test.assertEqual(c.state, STATE_PAIRING);
     Test.assertEqual(client.calls[0], "pair");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function recognizingStopsListeningAndTheTextFollows(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    var recorder = t[2] as FakeRecorder;
+    ConversationTests.open(c, client);
+    c.onAudioData([1, 2]b);
+    c.onAudioData([3, 4]b);
+    Test.assertEqual(client.pending.size(), 2);
+    // The VAD ended the command: one request waits for the text, the other says so at once
+    client.answer(RESULT_OK, 200, { "state" => "recognizing" });
+    Test.assertEqual(c.state, STATE_RECOGNIZING);
+    Test.assert(!recorder.started);
+    Test.assertEqual(client.pending.size(), 1);
+    // What the microphone still hands over is not sent
+    c.onAudioData([5]b);
+    Test.assertEqual(client.pending.size(), 1);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    Test.assertEqual(c.state, STATE_SENDING);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function recognizingThenNoTextAsksAgainWithFinal(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1, 2]b);
+    c.onAudioData([3, 4]b);
+    client.answer(RESULT_OK, 200, { "state" => "recognizing" });
+    // The one waiting ran out of time without the text: an empty "final" asks again
+    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
+    Test.assertEqual(client.pending.size(), 1);
+    Test.assertEqual(client.lastChunk[0], 4);
+    Test.assertEqual(client.lastChunk[1], 0);
+    Test.assertEqual(client.lastChunk[3], true);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    Test.assertEqual(c.state, STATE_SENDING);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function recognizingFromHomeAssistantShowsNoLookAtFirst(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1, 2]b);
+    c.onAudioData([3, 4]b);
+    client.answer(RESULT_OK, 200, { "state" => "recognizing" });
+    // The logic has stopped listening; the screen keeps the listening look for now
+    Test.assertEqual(c.state, STATE_RECOGNIZING);
+    Test.assertEqual(c.shown.state, STATE_RECOGNIZING);
+    Test.assert(!c.shown.revealed);
+    // The text comes quickly: no "Recognising" was shown, so nothing is held
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    Test.assertEqual(c.shown.state, STATE_SENDING);
+    Test.assertEqual(c.shown.holdLeft(System.getTimer()), 0);
     ConversationTests.tearDown(c);
     return true;
 }

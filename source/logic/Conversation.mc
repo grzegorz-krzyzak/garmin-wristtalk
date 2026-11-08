@@ -34,10 +34,9 @@ enum EntryKind {
 //! so the tests can use fakes.
 class Conversation {
 
-    const KEY_REREAD_MS = 500;           // no key at the start: read once more before pairing
-    const CONNECTING_SHOW_MS = 500;      // "Connecting…" only when the check takes longer than this,
-    const CONNECTING_MIN_MS = 1000;      // and then on screen at least this long - no flash
-    const CONNECTING_CAP_MS = 10000;     // no answer: a connection error
+    const KEY_REREAD_MS = 300;           // no key at the start: read once more before pairing (shorter
+                                         // than ShownState.SHOW_MS: "Connecting…" must not show meanwhile)
+    const CONNECTING_CAP_MS = 10500;     // no answer: a connection error
     const NO_SPEECH_MS = 12000;          // from the first audio: nothing said -> "nothing heard"; 5 s was
                                          // too short through the phone (speech seen in HA at 5-7 s, 2026-11-05)
     const LISTEN_CAP_MS = 25000;         // the integration closes at 20 s; this only guards the watch
@@ -62,7 +61,8 @@ class Conversation {
     var errorHint as String = "";
     var popup as String = "";
     var popupKind as PopupKind = POPUP_PAIRED;
-    var connectingShown as Boolean = false;
+    //! What the screen shows of `state` - waiting states without flashing by (ShownState)
+    var shown as ShownState = new ShownState();
     //! Idle with nothing in the conversation: the START arc pulses (ticks every PULSE_MS)
     var pulsing as Boolean = false;
     var tick as Number = 0;
@@ -85,11 +85,14 @@ class Conversation {
     private var _sent as Number = 0;
     private var _inFlight as Array<ChunkRequest> = [] as Array<ChunkRequest>;
     private var _finalPending as Boolean = false;
+    // Home Assistant said "recognizing": the command has ended there, more audio is not sent
+    private var _inputEnded as Boolean = false;
     //! After START until the microphone has handed over all it holds (up to a second of speech)
     private var _awaitingRest as Boolean = false;
     private var _speech as Boolean = false;
     private var _textOnly as Boolean = false;
-    private var _connectingShownAt as Number = 0;
+    private var _fastTicks as Boolean = false;
+    private var _voice as ByteArray? = null;
     private var _pingResult as Result?;
     // Timers (watches limit how many may run): one for ticks and the popup, one for waits (pairing
     // shares it), one for closing on idle
@@ -123,8 +126,7 @@ class Conversation {
         if (Settings.key() == null) {
             // A paired watch once opened on pairing with its key still stored (2026-11-08): the key
             // is read once more after a moment; nothing shows meanwhile
-            state = STATE_CONNECTING;
-            connectingShown = false;
+            setState(STATE_CONNECTING, SHOW_WAITING);
             waitThen(KEY_REREAD_MS, method(:onKeyReread));
             return;
         }
@@ -145,12 +147,11 @@ class Conversation {
 
     private function startWithKey() as Void {
         if (Settings.listenOnOpen()) {
-            state = STATE_CONNECTING;
-            connectingShown = false;
+            setState(STATE_CONNECTING, SHOW_WAITING);
             _pingResult = null;
-            waitThen(CONNECTING_SHOW_MS, method(:onConnectingSlow));
+            waitThen(CONNECTING_CAP_MS, method(:onConnectingTimeout));
         } else {
-            state = STATE_IDLE;
+            setState(STATE_IDLE, SHOW_AFTER_HOLD);
             armIdleExit(Settings.idleExitMs());
         }
         _client.ping(method(:onPing));
@@ -165,22 +166,13 @@ class Conversation {
             return;
         }
         _pingResult = result;
-        var left = connectingShown ? CONNECTING_MIN_MS - (System.getTimer() - _connectingShownAt) : 0;
+        // "Connecting…" on screen stays its minimum: the microphone opens when "Listening" shows
+        var left = shown.holdLeft(System.getTimer());
         if (left > 0) {
             waitThen(left, method(:onConnected));
         } else {
             onConnected();
         }
-    }
-
-    function onConnectingSlow() as Void {
-        if (state != STATE_CONNECTING) {
-            return;
-        }
-        connectingShown = true;
-        _connectingShownAt = System.getTimer();
-        waitThen(CONNECTING_CAP_MS, method(:onConnectingTimeout));
-        WatchUi.requestUpdate();
     }
 
     function onConnectingTimeout() as Void {
@@ -249,7 +241,7 @@ class Conversation {
     }
 
     private function beginPairing() as Void {
-        state = STATE_PAIRING;
+        setState(STATE_PAIRING, SHOW_NOW);
         error = "";
         stopPulse();
         idle.stop();  // no idle time while pairing: in the background it asks nothing anyway
@@ -265,7 +257,7 @@ class Conversation {
         error = "";
         commandCount++;
         _lastCommandAt = null;
-        state = STATE_IDLE;
+        setState(STATE_IDLE, SHOW_NOW);
         buzz(BUZZ_REPLY);
         showPopup(POPUP_PAIRED, Settings.text(Rez.Strings.PairDone), POPUP_MS);
         armIdleExit(Settings.idleExitMs());
@@ -305,7 +297,7 @@ class Conversation {
         if (state == STATE_LISTENING || state == STATE_RECOGNIZING || state == STATE_SENDING
                 || state == STATE_LOADING_VOICE || state == STATE_PLAYING) {
             stopCommand();
-            state = STATE_IDLE;
+            setState(STATE_IDLE, SHOW_NOW);
             armIdleExit(Settings.idleExitMs());
             WatchUi.requestUpdate();
             return true;
@@ -366,7 +358,7 @@ class Conversation {
         // Opening the app or "keep listening" after a reply while the menu is on top: no microphone
         // under the menu - idle until START
         if (_covered) {
-            state = STATE_IDLE;
+            setState(STATE_IDLE, SHOW_NOW);
             _idleWhenShown = true;
             WatchUi.requestUpdate();
             return;
@@ -386,6 +378,7 @@ class Conversation {
         abandonChunks();
         _finalPending = false;
         _awaitingRest = false;
+        _inputEnded = false;
         _speech = false;
         _textOnly = Settings.textOnly();
         _session = System.getTimer().format("%x") + Math.rand().format("%x");
@@ -394,7 +387,7 @@ class Conversation {
             fail(Settings.text(Rez.Strings.ErrMicStart), true);
             return;
         }
-        state = STATE_LISTENING;
+        setState(STATE_LISTENING, SHOW_NOW);
         startTicks();
         waitThen(LISTEN_CAP_MS, method(:finishListening));
         WatchUi.requestUpdate();
@@ -424,7 +417,7 @@ class Conversation {
     function onAudioData(data as ByteArray) as Void {
         // What the microphone still hands over after the command is known stays on the watch:
         // sent, it took the phone's bandwidth from the reply (seen 2026-11-05, up to 16 kB)
-        if (!takingAudio()) {
+        if (!takingAudio() || _inputEnded) {
             return;
         }
         if (_audio.size() == 0) {
@@ -451,7 +444,7 @@ class Conversation {
         }
         _finalPending = true;
         _awaitingRest = true;
-        state = STATE_RECOGNIZING;
+        setState(STATE_RECOGNIZING, SHOW_NOW);
         WatchUi.requestUpdate();
         // The flags first: stopping may hand over the rest and report the end at once
         waitThen(REST_WAIT_MS, method(:sendFinal));
@@ -557,13 +550,25 @@ class Conversation {
         if (answer.equals("heard")) {
             heard = result.text("heard");
             // The state first: stopping the microphone hands over what it still holds
-            state = STATE_SENDING;
+            setState(STATE_SENDING, SHOW_WAITING);
             _recorder.stop();
             _waitTimer.stop();
             buzz(BUZZ_SENT);
             _client.reply(_session, method(:onReply));
         } else if (answer.equals("nothing")) {
             notHeard();
+        } else if (answer.equals("recognizing")) {
+            // Home Assistant has ended the command (silence) and another request waits for the
+            // text (protocol 5): stop listening now; a "listening" without the text later asks
+            // again with an empty "final"
+            if (state == STATE_LISTENING) {
+                setState(STATE_RECOGNIZING, SHOW_WAITING);
+                _finalPending = true;
+                _awaitingRest = false;
+                _inputEnded = true;
+                _waitTimer.stop();
+                _recorder.stop();
+            }
         } else if (_finalPending && !_awaitingRest) {
             sendChunk(true);
         } else {
@@ -600,7 +605,7 @@ class Conversation {
         buzz(BUZZ_REPLY);
         WatchUi.requestUpdate();
         if (result.flag("audio") && !Settings.textOnly()) {
-            state = STATE_LOADING_VOICE;
+            setState(STATE_LOADING_VOICE, SHOW_WAITING);
             _client.audio(_session, method(:onAudio));
         } else {
             done();
@@ -622,9 +627,28 @@ class Conversation {
             return;
         }
         // Any other failure: the reply text is on screen already - only the voice is missing
-        if (result.ok() && result.data instanceof ByteArray
-                && _player.play(result.data as ByteArray, Settings.volume(), method(:onPlayed))) {
-            state = STATE_PLAYING;
+        if (!result.ok() || !(result.data instanceof ByteArray)) {
+            done();
+            return;
+        }
+        // The voice starts with its screen: after "Thinking" / "Loading voice" stayed their minimum
+        _voice = result.data as ByteArray;
+        var left = shown.holdLeft(System.getTimer());
+        if (left > 0) {
+            waitThen(left, method(:playVoice));
+        } else {
+            playVoice();
+        }
+    }
+
+    function playVoice() as Void {
+        var voice = _voice;
+        _voice = null;
+        if (state != STATE_LOADING_VOICE || voice == null) {
+            return;
+        }
+        if (_player.play(voice, Settings.volume(), method(:onPlayed))) {
+            setState(STATE_PLAYING, SHOW_AFTER_HOLD);
             WatchUi.requestUpdate();
         } else {
             done();
@@ -648,7 +672,7 @@ class Conversation {
     // --- endings ------------------------------------------------------------------------------
 
     private function done() as Void {
-        state = STATE_IDLE;
+        setState(STATE_IDLE, SHOW_AFTER_HOLD);
         stopTicks();
         if (Settings.listenAfterReply()) {
             listen();
@@ -662,7 +686,7 @@ class Conversation {
     private function notHeard() as Void {
         stopCommand();
         buzz(BUZZ_REPLY);
-        state = STATE_IDLE;
+        setState(STATE_IDLE, SHOW_AFTER_HOLD);
         // A popup, not a note in the conversation, where it would fall below the anchored command,
         // out of sight; it stays until START (which listens again) or BACK
         showPopup(POPUP_NOT_HEARD, Settings.text(Rez.Strings.NotHeard), 0);
@@ -683,7 +707,7 @@ class Conversation {
     private function fail(message as String, retryHelps as Boolean) as Void {
         stopCommand();
         buzz(BUZZ_ERROR);
-        state = STATE_ERROR;
+        setState(STATE_ERROR, SHOW_AFTER_HOLD);
         error = message;
         errorHint = retryHelps ? Settings.text(Rez.Strings.StartToRetry) : "";
         armIdleExit(Settings.idleExitMs());
@@ -691,6 +715,15 @@ class Conversation {
     }
 
     // --- timers -------------------------------------------------------------------------------
+
+    //! The state at once; the screen by ShownState's rules - the ticks run until it has caught up
+    private function setState(next as State, kind as ShowKind) as Void {
+        state = next;
+        shown.change(next, kind, System.getTimer());
+        if (!shown.settled()) {
+            runTicks();
+        }
+    }
 
     private function waitThen(ms as Number, callback as Method() as Void) as Void {
         _waitTimer.stop();
@@ -705,7 +738,7 @@ class Conversation {
         _covered = true;
         if (state == STATE_LISTENING) {
             stopCommand();
-            state = STATE_IDLE;
+            setState(STATE_IDLE, SHOW_NOW);
             _idleWhenShown = true;
         }
         if (idle.armed) {
@@ -742,7 +775,7 @@ class Conversation {
             pairing.pause();
         } else if (state == STATE_LISTENING) {
             stopCommand();
-            state = STATE_IDLE;
+            setState(STATE_IDLE, SHOW_NOW);
             armIdle();
         }
     }
@@ -827,10 +860,16 @@ class Conversation {
             pulsing = false;
             _tickTimer.stop();
             _ticking = false;
-            if (popup.length() > 0 && _popupUntil > 0) {
-                runTicks();  // a timed popup still has to go
+            _fastTicks = false;
+            if (fastTicksNeeded()) {
+                runTicks();  // a timed popup still has to go, or the screen has to catch up
             }
         }
+    }
+
+    //! The fast ticks: an animation, a timed popup, or the screen catching up with the state
+    private function fastTicksNeeded() as Boolean {
+        return _animating || (popup.length() > 0 && _popupUntil > 0) || !shown.settled();
     }
 
     private function startTicks() as Void {
@@ -841,32 +880,38 @@ class Conversation {
 
     private function stopTicks() as Void {
         _animating = false;
-        if (popup.length() == 0 || _popupUntil == 0) {
+        if (!fastTicksNeeded()) {
             _tickTimer.stop();
             _ticking = false;
+            _fastTicks = false;
         }
     }
 
     private function runTicks() as Void {
-        if (!_ticking) {
+        if (!_ticking || !_fastTicks) {
+            _tickTimer.stop();
             _ticking = true;
+            _fastTicks = true;
             _tickTimer.start(method(:onTick), TICK_MS, true);
         }
     }
 
     function onTick() as Void {
+        var now = System.getTimer();
         tick++;
-        checkChunks(System.getTimer());
-        if (popup.length() > 0 && _popupUntil > 0 && System.getTimer() >= _popupUntil) {
+        checkChunks(now);
+        shown.update(now);
+        if (popup.length() > 0 && _popupUntil > 0 && now >= _popupUntil) {
             popup = "";
-            if (!_animating) {
-                _tickTimer.stop();
-                _ticking = false;
-                if (pulsing) {
-                    // The popup ran the fast ticks; the pulse goes on at its own pace
-                    _ticking = true;
-                    _tickTimer.start(method(:onTick), PULSE_MS, true);
-                }
+        }
+        if (_fastTicks && !fastTicksNeeded()) {
+            _tickTimer.stop();
+            _ticking = false;
+            _fastTicks = false;
+            if (pulsing) {
+                // The fast ticks are done; the pulse goes on at its own pace
+                _ticking = true;
+                _tickTimer.start(method(:onTick), PULSE_MS, true);
             }
         }
         WatchUi.requestUpdate();
