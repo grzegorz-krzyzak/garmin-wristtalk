@@ -40,12 +40,36 @@ class Pairing {
             WatchUi.requestUpdate();
             return;
         }
+        // A pairing kept from before (the app closed meanwhile): the same code, and its key if the
+        // code was typed in Home Assistant meanwhile
+        var kept = Settings.pairingInProgress();
+        if (kept != null) {
+            _pairId = kept[0];
+            code = kept[1];
+            notice = "";
+            poll();
+            WatchUi.requestUpdate();
+            return;
+        }
         // What to do shows from the first moment - no passing "connecting" state that flashes by
         if (notice.length() == 0) {
             notice = Settings.text(Rez.Strings.PairOpenInHa);
         }
         _client.pair(Settings.watchInfo(), method(:onPair));
         WatchUi.requestUpdate();
+    }
+
+    //! The app went to the background: nothing asks the house until it is back (resume)
+    function pause() as Void {
+        _active = false;
+        _timer.stop();
+    }
+
+    //! Back from the background: the same pairing goes on (its id is kept on the watch)
+    function resume() as Void {
+        if (!_active) {
+            begin();
+        }
     }
 
     function stop() as Void {
@@ -61,6 +85,7 @@ class Pairing {
             _pairId = result.text("pair_id");
             code = result.text("code");
             notice = "";
+            Settings.setPairingInProgress(_pairId, code);
             _timer.start(method(:poll), POLL_MS, false);
         } else {
             notice = result.kind == RESULT_PAIRING_CLOSED || result.kind == RESULT_BUSY
@@ -82,6 +107,10 @@ class Pairing {
         }
         if (result.ok() && result.text("state").equals("paired")) {
             Settings.setKey(result.text("key"));
+            Settings.clearPairingInProgress();
+            // The proof for Home Assistant: a request signed with the new key - it stores the watch
+            // only then (integration 0.1.7)
+            _client.ping(method(:onKeyConfirmed));
             code = "";
             notice = "";
             stop();
@@ -91,9 +120,15 @@ class Pairing {
             // Assistant still shows it, and a key confirmed meanwhile can still be collected
             _timer.start(method(:poll), POLL_MS, false);
         } else {
+            // Over (expired, closed): a kept pairing is gone too - a new one starts
+            Settings.clearPairingInProgress();
             begin();
         }
         WatchUi.requestUpdate();
+    }
+
+    //! Nothing to do with the answer: the key is stored either way
+    function onKeyConfirmed(result as Result) as Void {
     }
 
     //! Home Assistant answered that this pairing is over (expired, closed, refused)

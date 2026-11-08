@@ -35,6 +35,11 @@ class FakeClient extends HaClient {
         pending.add(done);
     }
 
+    function repair(done as Method(result as Result) as Void) as Void {
+        calls.add("repair:" + Settings.key());
+        pending.add(done);
+    }
+
     function sendChunk(session as String, offset as Number, audio as ByteArray, textOnly as Boolean,
             final as Boolean, done as Method(result as Result) as Void) as Void {
         calls.add("chunk");
@@ -118,7 +123,7 @@ module ConversationTests {
 
     // What the dev build keeps in the simulator (pairing with the house, settings): saved before
     // a test and put back after it, so a test run does not unpair the app
-    const STORAGE_KEYS = ["key", "pairedUrl"];
+    const STORAGE_KEYS = ["key", "pairedUrl", "pairId", "pairCode", "pairUrl"];
     const PROPERTY_KEYS = ["houseUrl", "replyMode", "afterReply", "listenOnOpen"];
     var saved as Array = [];
 
@@ -135,6 +140,7 @@ module ConversationTests {
         Application.Properties.setValue("afterReply", 0);
         Application.Properties.setValue("listenOnOpen", true);
         Settings.clearKey();
+        Settings.clearPairingInProgress();
         if (paired) {
             Settings.setKey("k1");
         }
@@ -187,6 +193,9 @@ function pairingShowsTheCodeAndStoresTheKey(logger as Test.Logger) as Boolean {
     client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret" });
     Test.assertEqual(c.state, STATE_IDLE);
     Test.assertEqual(Settings.key(), "secret");
+    // The proof for Home Assistant: the first request signed with the new key
+    Test.assertEqual(client.calls[client.calls.size() - 1], "ping");
+    Test.assert(Settings.pairingInProgress() == null);
     Test.assertEqual(c.popup, Settings.text(Rez.Strings.PairDone));
     Test.assert(c.isEmpty() && c.pulsing);
     ConversationTests.tearDown(c);
@@ -324,6 +333,217 @@ function aRejectedKeyPairsAgain(logger as Test.Logger) as Boolean {
     Test.assert(Settings.key() == null);
     Test.assertEqual(client.calls[client.calls.size() - 1], "pair");
     ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function pairAgainTellsHomeAssistantThenShowsACode(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    Test.assert(c.canPairAgain());
+    // Asked under the YES / NO (it covers the app), answered yes: the pairing's long limit, not the
+    // idle time of the setting
+    c.onCovered();
+    c.pairAgain();
+    c.onUncovered();
+    Test.assert(!c.idle.armed);
+    // Told with the key, before the key goes
+    Test.assert(client.calls.indexOf("repair:k1") >= 0);
+    Test.assertEqual(client.calls[client.calls.size() - 1], "pair");
+    Test.assertEqual(c.state, STATE_PAIRING);
+    Test.assert(Settings.key() == null);
+    Test.assert(!c.canPairAgain());
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function textOnlyFromTheMenuShowsNoPopup(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    ConversationTests.open(c, t[1] as FakeClient);
+    c.setTextOnly(true);
+    Test.assert(Settings.textOnly());
+    Test.assertEqual(c.popup, "");
+    c.setTextOnly(false);
+    Test.assert(!Settings.textOnly());
+    Test.assertEqual(c.popup, "");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function theMenuStopsTheIdleTimeUntilTheAppShowsAgain(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    Application.Properties.setValue("listenOnOpen", false);
+    var c = t[0] as Conversation;
+    ConversationTests.open(c, t[1] as FakeClient);
+    Test.assert(c.idle.armed);
+    c.onCovered();
+    Test.assert(!c.idle.armed);
+    Test.assertEqual(c.idle.countdown, 0);
+    c.onUncovered();
+    Test.assert(c.idle.armed);
+    // Covered while nothing counted (a command running): nothing starts afterwards
+    c.idle.stop();
+    c.onCovered();
+    c.onUncovered();
+    Test.assert(!c.idle.armed);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function theMenuEndsListeningQuietly(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var recorder = t[2] as FakeRecorder;
+    ConversationTests.open(c, t[1] as FakeClient);
+    Test.assertEqual(c.state, STATE_LISTENING);
+    c.onCovered();
+    Test.assertEqual(c.state, STATE_IDLE);
+    Test.assert(!recorder.started);
+    Test.assertEqual(c.popup, "");
+    Test.assert(!c.idle.armed);
+    c.onUncovered();
+    Test.assert(c.idle.armed);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function nothingStartsListeningUnderTheMenu(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    Test.assertEqual(c.state, STATE_CONNECTING);
+    c.onCovered();
+    client.answer(RESULT_OK, 200, {});
+    Test.assertEqual(c.state, STATE_IDLE);
+    Test.assert(!(t[2] as FakeRecorder).started);
+    Test.assert(!c.idle.armed);
+    c.onUncovered();
+    Test.assert(c.idle.armed);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function pairingHasNoIdleTime(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(false);
+    var c = t[0] as Conversation;
+    c.startOnce();
+    Test.assertEqual(c.state, STATE_PAIRING);
+    Test.assert(!c.idle.armed);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aKeptPairingCollectsTheKeyAfterTheAppOpensAgain(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(false);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
+    // The app closes (BACK); the code is typed in Home Assistant; the app opens again
+    c.shutdown();
+    var client2 = new FakeClient();
+    var c2 = new Conversation(client2, new FakeRecorder(), new FakePlayer());
+    c2.startOnce();
+    Test.assertEqual(client2.calls[0], "poll:p1");
+    Test.assertEqual(c2.pairing.code, "482913");
+    client2.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret" });
+    Test.assertEqual(Settings.key(), "secret");
+    Test.assertEqual(client2.calls[client2.calls.size() - 1], "ping");
+    ConversationTests.tearDown(c2);
+    return true;
+}
+
+(:test)
+function aKeptPairingThatEndedStartsANewOne(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(false);
+    Settings.setPairingInProgress("old", "111111");
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    Test.assertEqual(client.calls[0], "poll:old");
+    client.answer(RESULT_EXPIRED, 410, null);
+    Test.assert(Settings.pairingInProgress() == null);
+    Test.assertEqual(client.calls[client.calls.size() - 1], "pair");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function nothingAsksTheHouseInTheBackground(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(false);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
+    c.onBackground();
+    var before = client.calls.size();
+    c.pairing.poll();
+    Test.assertEqual(client.calls.size(), before);
+    // Back: the same pairing goes on
+    c.onForeground();
+    Test.assertEqual(client.calls[client.calls.size() - 1], "poll:p1");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function theBackgroundEndsListeningQuietly(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    ConversationTests.open(c, t[1] as FakeClient);
+    Test.assertEqual(c.state, STATE_LISTENING);
+    c.onBackground();
+    Test.assertEqual(c.state, STATE_IDLE);
+    Test.assertEqual(c.popup, "");
+    // The idle time runs on in the background: the app closes there too
+    Test.assert(c.idle.armed);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function anUnpairedWatchHasNoPairAgain(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(false);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    Test.assert(!c.canPairAgain());
+    c.pairAgain();
+    Test.assertEqual(client.calls.indexOf("repair:null"), -1);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+class ResultBox {
+    var kind as ResultKind? = null;
+
+    function initialize() {
+    }
+
+    function done(result as Result) as Void {
+        kind = result.kind;
+    }
+}
+
+(:test)
+function anHttpAddressSendsNothing(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    Application.Properties.setValue("houseUrl", "http://home.example.org");
+    var box = new ResultBox();
+    new HaClient("test").ping(box.method(:done));
+    Test.assertEqual(box.kind, RESULT_HTTPS);
+    ConversationTests.tearDown(t[0] as Conversation);
     return true;
 }
 
@@ -798,6 +1018,18 @@ function anErrorSaysWhetherStartHelps(logger as Test.Logger) as Boolean {
     client.answer(RESULT_UPDATE_INTEGRATION, 501, null);
     Test.assertEqual(c.error, Settings.text(Rez.Strings.ErrUpdateIntegration));
     Test.assertEqual(c.errorHint, "");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function theHttpsStartOfTheAddressIsNoAddressYet(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(false);
+    Application.Properties.setValue("houseUrl", "https://");
+    var c = t[0] as Conversation;
+    c.startOnce();
+    Test.assertEqual(c.pairing.notice, Settings.text(Rez.Strings.PairNoAddress));
+    Test.assertEqual((t[1] as FakeClient).calls.size(), 0);
     ConversationTests.tearDown(c);
     return true;
 }

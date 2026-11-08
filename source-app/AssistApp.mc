@@ -29,7 +29,23 @@ class AssistApp extends Application.AppBase {
         return [new AssistView(conversation, scroller), new AssistDelegate(conversation, scroller)];
     }
 
-    //! Garmin Connect sent new settings: "Reconnect", or a new house address
+    //! The system took the app to the background or brought it back (the app switcher, the watch
+    //! face) - API 4.2; the view's hide / show covers the same without it
+    (:typecheck([disableGlanceCheck]))
+    function onInactive(state as Dictionary?) as Void {
+        if (_conversation != null) {
+            _conversation.onBackground();
+        }
+    }
+
+    (:typecheck([disableGlanceCheck]))
+    function onActive(state as Dictionary?) as Void {
+        if (_conversation != null) {
+            _conversation.onForeground();
+        }
+    }
+
+    //! Garmin Connect sent new settings: a new house address
     // Foreground only - the glance never runs it
     (:typecheck([disableGlanceCheck]))
     function onSettingsChanged() as Void {

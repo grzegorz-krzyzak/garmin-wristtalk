@@ -15,6 +15,9 @@ class IdleClose {
     var countdownFrom as Number = 0;
     //! When the idle time last started (System.getTimer)
     var armedAt as Number = 0;
+    //! The idle time (or its countdown) is running, and for how long it was set (ms)
+    var armed as Boolean = false;
+    var armedFor as Number = 0;
 
     private var _timer as Timer.Timer = new Timer.Timer();
     private var _warnMs as Number = 0;
@@ -28,6 +31,8 @@ class IdleClose {
     function arm(ms as Number) as Void {
         _timer.stop();
         countdown = 0;
+        armed = true;
+        armedFor = ms;
         armedAt = System.getTimer();
         _warnMs = ms >= 2 * COUNTDOWN_MS ? COUNTDOWN_MS : ms / 3;
         _timer.start(method(:onWarning), ms - _warnMs, false);
@@ -36,6 +41,7 @@ class IdleClose {
     function stop() as Void {
         _timer.stop();
         countdown = 0;
+        armed = false;
     }
 
     function onWarning() as Void {

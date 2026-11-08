@@ -15,15 +15,18 @@ first version supports the fēnix 8 Solar 51 mm; more models will follow.
 
 ## Use
 
-1. In Home Assistant: WristTalk -> **Add watch**. Set the house address it shows in the app
-   settings in Garmin Connect.
-2. Open WristTalk on the watch: it shows a pairing code. Confirm it in Home Assistant if it matches.
+1. In Home Assistant: WristTalk -> **Add watch**. Set the house address it shows in the app's
+   settings in the Connect IQ app on the phone.
+2. Open WristTalk on the watch: it shows a pairing code. Type it in Home Assistant.
 3. Open the app from the glance list (DOWN, START) and speak. START ends the command early, BACK
-   cancels, UP/DOWN scroll the conversation, hold UP switches between voice and text only.
+   cancels, UP/DOWN scroll the conversation, hold UP opens the menu (text only, pair again, the version).
 
-Settings in Garmin Connect: house address, reconnect, listen as soon as it opens, after a reply
+The watch can do everything you exposed to Assist in Home Assistant, also over the internet: turn on
+the watch's passcode, and delete a lost watch in Home Assistant (its key stops working at once).
+
+Settings in the Connect IQ app: house address, listen as soon as it opens, after a reply
 (wait for START / keep listening), reply (voice and text / text only), volume, text size,
-vibration, close when idle.
+vibration, close when idle, and a link to the help page.
 
 The conversation language (speech-to-text, agent, voice) is the one of the Assist pipeline chosen
 for the watch in Home Assistant; the watch language sets only the app's own texts (English and

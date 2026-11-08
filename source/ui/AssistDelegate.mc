@@ -42,9 +42,11 @@ class AssistDelegate extends WatchUi.BehaviorDelegate {
         return _session.onBack();
     }
 
-    //! Hold UP: switch "text only" on/off at once - no menu
+    //! Hold UP: the menu - "Text only" and "Pair again" (the Garmin way: hold UP = menu)
     function onMenu() as Boolean {
-        _session.toggleTextOnly();
+        // Marked before it shows: the hide that follows is the menu's, not the system's
+        _session.onCovered();
+        WatchUi.pushView(AppMenu.build(_session), new AppMenuDelegate(_session), WatchUi.SLIDE_UP);
         return true;
     }
 

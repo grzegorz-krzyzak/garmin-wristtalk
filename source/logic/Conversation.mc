@@ -74,6 +74,9 @@ class Conversation {
     private var _recorder as Recorder;
     private var _player as Player;
     private var _started as Boolean = false;
+    private var _idleWhenShown as Boolean = false;  // the idle time was stopped by the menu
+    private var _covered as Boolean = false;        // the menu (or its YES / NO) is on top
+    private var _inBackground as Boolean = false;   // the system took the app away (watch face)
     private var _lastCommandAt as Number?;
     // The current command
     private var _session as String = "";
@@ -177,9 +180,9 @@ class Conversation {
         }
     }
 
-    //! Settings changed in Garmin Connect: "Reconnect" on, or a new address
+    //! Settings changed in the Connect IQ app: a new address (the key belongs to the old one)
     function onSettingsChanged() as Void {
-        if (Settings.takeReconnect() || Settings.key() == null) {
+        if (Settings.key() == null && state != STATE_PAIRING) {
             reconnect();
         }
         WatchUi.requestUpdate();
@@ -195,8 +198,29 @@ class Conversation {
 
     // --- pairing ------------------------------------------------------------------------------
 
+    //! The menu offers "Pair again" only to a paired watch
+    function canPairAgain() as Boolean {
+        return Settings.key() != null && state != STATE_PAIRING;
+    }
+
+    //! "Pair again" from the menu: Home Assistant is told first, with the key - it revokes the key
+    //! and shows that the watch needs pairing (protocol 3); then the key goes and the code shows.
+    //! Told or not (no phone at the moment), typing the code replaces the key in Home Assistant
+    function pairAgain() as Void {
+        if (!canPairAgain()) {
+            return;
+        }
+        _client.repair(method(:onRepairSent));
+        reconnect();
+    }
+
+    //! Nothing to do with the answer: the pairing has started either way
+    function onRepairSent(result as Result) as Void {
+    }
+
     private function reconnect() as Void {
         Settings.clearKey();
+        Settings.clearPairingInProgress();
         stopCommand();
         pairing.notice = "";
         beginPairing();
@@ -205,8 +229,8 @@ class Conversation {
     private function beginPairing() as Void {
         state = STATE_PAIRING;
         error = "";
-        idle.stop();
         stopPulse();
+        idle.stop();  // no idle time while pairing: in the background it asks nothing anyway
         pairing.begin();
     }
 
@@ -280,27 +304,51 @@ class Conversation {
         return false;
     }
 
-    //! Hold UP: "text only" on/off (also the setting in Garmin Connect)
+    //! "Text only" from the menu: the switch shows the state, so no popup - as Garmin's own menus;
+    //! the speaker sign above the status shows the mode afterwards
+    function setTextOnly(on as Boolean) as Void {
+        onScrollInput();
+        applyTextOnly(on);
+        WatchUi.requestUpdate();
+    }
+
+    //! A quick switch without a view to show it (a long press on the status line, backlog): with a
+    //! popup
     function toggleTextOnly() as Void {
         if (onScrollInput()) {
             return;
         }
-        if (!Capabilities.hasSpeaker()) {
-            return;
-        }
         var on = !Settings.textOnly();
+        if (applyTextOnly(on)) {
+            showPopup(on ? POPUP_TEXT_ONLY : POPUP_VOICE,
+                Settings.text(on ? Rez.Strings.ModeTextOnly : Rez.Strings.ModeVoiceText), POPUP_MS);
+        }
+    }
+
+    //! Also the setting in the Connect IQ app; a voice playing stops at once. False without a speaker
+    private function applyTextOnly(on as Boolean) as Boolean {
+        if (!Capabilities.hasSpeaker()) {
+            return false;
+        }
         Settings.setTextOnly(on);
         if (on && (state == STATE_PLAYING || state == STATE_LOADING_VOICE)) {
             _player.stop();
             done();
         }
-        showPopup(on ? POPUP_TEXT_ONLY : POPUP_VOICE,
-            Settings.text(on ? Rez.Strings.ModeTextOnly : Rez.Strings.ModeVoiceText), POPUP_MS);
+        return true;
     }
 
     // --- a command ----------------------------------------------------------------------------
 
     function listen() as Void {
+        // Opening the app or "keep listening" after a reply while the menu is on top: no microphone
+        // under the menu - idle until START
+        if (_covered) {
+            state = STATE_IDLE;
+            _idleWhenShown = true;
+            WatchUi.requestUpdate();
+            return;
+        }
         idle.stop();
         stopPulse();
         _waitTimer.stop();
@@ -617,7 +665,77 @@ class Conversation {
         _waitTimer.start(callback, ms, false);
     }
 
+    //! The menu (or its YES / NO) covers the app. Listening ends quietly, as with BACK - no
+    //! "nothing heard"; a command already sent goes on (the house has it), its reply shows on return.
+    //! Under the menu nothing starts listening and the idle time stands still - its countdown would
+    //! vibrate unseen and close the app while the menu is in use (seen on the fēnix 8)
+    function onCovered() as Void {
+        _covered = true;
+        if (state == STATE_LISTENING) {
+            stopCommand();
+            state = STATE_IDLE;
+            _idleWhenShown = true;
+        }
+        if (idle.armed) {
+            idle.stop();
+            _idleWhenShown = true;
+        }
+    }
+
+    //! Back on the app's screen: the idle time starts again, in full (while pairing: its limit)
+    function onUncovered() as Void {
+        _covered = false;
+        if (_idleWhenShown) {
+            _idleWhenShown = false;
+            armIdle();
+        }
+    }
+
+    //! The idle time of the setting - not while pairing, which has none
+    private function armIdle() as Void {
+        if (state != STATE_PAIRING) {
+            armIdleExit(Settings.idleExitMs());
+        }
+    }
+
+    //! The system took the app to the background (the watch face, the app switcher): nothing goes
+    //! on unseen - pairing stops asking the house, listening ends quietly. A command already sent
+    //! goes on; the idle time keeps running, so the app also closes in the background
+    function onBackground() as Void {
+        if (_inBackground) {
+            return;
+        }
+        _inBackground = true;
+        if (state == STATE_PAIRING) {
+            pairing.pause();
+        } else if (state == STATE_LISTENING) {
+            stopCommand();
+            state = STATE_IDLE;
+            armIdle();
+        }
+    }
+
+    //! Back on screen: pairing goes on with the same pairing
+    function onForeground() as Void {
+        if (!_inBackground) {
+            return;
+        }
+        _inBackground = false;
+        if (state == STATE_PAIRING) {
+            pairing.resume();
+        }
+    }
+
+    //! True while our own menu (or its YES / NO) covers the app - not the system
+    function menuOpen() as Boolean {
+        return _covered;
+    }
+
     private function armIdleExit(ms as Number) as Void {
+        if (_covered) {
+            _idleWhenShown = true;  // starts when the menu closes
+            return;
+        }
         idle.arm(ms);
         updatePulse();
     }
@@ -630,7 +748,7 @@ class Conversation {
 
     //! A button during the countdown only stops it; the next press does what it does
     private function keepOpen() as Void {
-        armIdleExit(Settings.idleExitMs());
+        armIdle();
         WatchUi.requestUpdate();
     }
 

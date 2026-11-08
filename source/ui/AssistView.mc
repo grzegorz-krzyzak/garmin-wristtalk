@@ -37,6 +37,15 @@ class AssistView extends WatchUi.View {
 
     function onShow() as Void {
         _c.startOnce();
+        _c.onUncovered();
+        _c.onForeground();
+    }
+
+    //! Hidden: by our menu (it marked itself), or by the system - the watch face, the app switcher
+    function onHide() as Void {
+        if (!_c.menuOpen()) {
+            _c.onBackground();
+        }
     }
 
     function onUpdate(dc as Dc) as Void {
@@ -318,13 +327,14 @@ class AssistView extends WatchUi.View {
         // START at 2 o'clock, BACK at 4 o'clock on the bezel
         var tick = bezelPoint(r, START_ANGLE, r - 32);
         var cross = bezelPoint(r, -START_ANGLE, r - 32);
+        // Green and red, as the system's own YES / NO (the "Pair again" question)
         dc.setPenWidth(4);
-        dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
+        dc.setColor(Graphics.COLOR_GREEN, Graphics.COLOR_TRANSPARENT);
         dc.drawLine(tick[0] - 11, tick[1], tick[0] - 3, tick[1] + 8);
         dc.drawLine(tick[0] - 3, tick[1] + 8, tick[0] + 11, tick[1] - 8);
-        dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawLine(cross[0] - 8, cross[1] - 8, cross[0] + 8, cross[1] + 8);
-        dc.drawLine(cross[0] - 8, cross[1] + 8, cross[0] + 8, cross[1] - 8);
+        dc.setColor(Graphics.COLOR_RED, Graphics.COLOR_TRANSPARENT);
+        dc.drawLine(cross[0] - 9, cross[1] - 9, cross[0] + 9, cross[1] + 9);
+        dc.drawLine(cross[0] - 9, cross[1] + 9, cross[0] + 9, cross[1] - 9);
         dc.setPenWidth(1);
     }
 

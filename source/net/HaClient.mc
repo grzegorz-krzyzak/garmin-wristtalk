@@ -19,7 +19,7 @@ enum ResultKind {
     RESULT_NO_PHONE,          // Bluetooth to the phone
     RESULT_TIMEOUT,
     RESULT_HTTPS,             // -1001: the address must be https://
-    RESULT_NO_ADDRESS,        // nothing set in Garmin Connect
+    RESULT_NO_ADDRESS,        // nothing set in the Connect IQ app
     RESULT_ERROR
 }
 
@@ -56,8 +56,9 @@ class Result {
 class HaClient {
 
     // Raised with the integration on every change one side sends or expects (the table: the
-    // integration's design notes); 2: waits within 4 s, audio 202, a timed-out request repeated
-    const PROTOCOL = "2";
+    // integration's design notes); 2: waits within 4 s, audio 202, a timed-out request repeated;
+    // 3: POST repair - "Pair again" from the menu
+    const PROTOCOL = "3";
     const API = "/api/wristtalk/v1/";
 
     private var _app as String;
@@ -77,6 +78,11 @@ class HaClient {
 
     function ping(done as Method(result as Result) as Void) as Void {
         jsonPost("ping", {} as Dictionary<Object, Object>, Settings.key(), done, true);
+    }
+
+    //! "Pair again": with the key, before the watch drops it - Home Assistant revokes it
+    function repair(done as Method(result as Result) as Void) as Void {
+        jsonPost("repair", {} as Dictionary<Object, Object>, Settings.key(), done, true);
     }
 
     //! A chunk of the command at its byte offset; textOnly matters on the first chunk, final = START
@@ -141,6 +147,12 @@ class HaClient {
         var base = Settings.houseUrl();
         if (base.length() == 0) {
             done.invoke(new Result(RESULT_NO_ADDRESS, 0, null));
+            return;
+        }
+        // The key and the recording go only over HTTPS: the iPhone refuses http:// itself (-1001),
+        // Android may not - the watch does not rely on the phone (security review 2026-11-07)
+        if (base.find("https://") != 0) {
+            done.invoke(new Result(RESULT_HTTPS, Communications.SECURE_CONNECTION_REQUIRED, null));
             return;
         }
         // A handler object per request, not :context: without the phone Connect IQ calls the

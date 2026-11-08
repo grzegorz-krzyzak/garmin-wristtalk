@@ -4,24 +4,30 @@ import Toybox.Math;
 import Toybox.System;
 import Toybox.WatchUi;
 
-//! The app settings (Garmin Connect on the phone; "text only" also by holding UP) and the pairing
+//! The app settings (the Connect IQ app on the phone; "text only" also by holding UP) and the pairing
 //! kept on the watch (the key, the address it belongs to).
 module Settings {
 
-    const APP_VERSION = "0.2.0";
+    //! The same as the version in manifest.xml (tools/check.sh checks it): shown in the menu and
+    //! sent to Home Assistant, whose watch card shows it
+    const APP_VERSION = "0.2.28";
 
     function number(key as String, fallback as Number) as Number {
         var value = Application.Properties.getValue(key);
         return value instanceof Number ? value : fallback;
     }
 
-    //! The house address from Garmin Connect, without a trailing slash; a dev build may bring a
+    //! The house address from the Connect IQ app, without a trailing slash; a dev build may bring a
     //! default for the simulator (devHouseUrl, see dev.jungle)
     function houseUrl() as String {
         var value = Application.Properties.getValue("houseUrl");
         var url = value instanceof String && value.length() > 0 ? value : devHouseUrl();
         while (url.length() > 0 && "/".equals(url.substring(url.length() - 1, url.length()))) {
             url = url.substring(0, url.length() - 1) as String;
+        }
+        // The setting starts as "https://", so the field shows in the Connect IQ app: no host yet = no address
+        if (url.equals("https:") || url.equals("http:")) {
+            return devHouseUrl();
         }
         return url;
     }
@@ -87,14 +93,28 @@ module Settings {
         Application.Storage.deleteValue("pairedUrl");
     }
 
-    //! "Reconnect" in Garmin Connect works as a button: on -> drop the key, set it back off
-    function takeReconnect() as Boolean {
-        if (flag("reconnect", false)) {
-            Application.Properties.setValue("reconnect", false);
-            clearKey();
-            return true;
+    //! The pairing in progress ([pair id, code]): kept on the watch, so the app closed and opened
+    //! again during pairing goes on with the same pairing - it collects a key confirmed meanwhile
+    function pairingInProgress() as Array<String>? {
+        var id = Application.Storage.getValue("pairId");
+        var code = Application.Storage.getValue("pairCode");
+        var url = Application.Storage.getValue("pairUrl");
+        if (id instanceof String && code instanceof String && url instanceof String && url.equals(houseUrl())) {
+            return [id, code] as Array<String>;
         }
-        return false;
+        return null;
+    }
+
+    function setPairingInProgress(id as String, code as String) as Void {
+        Application.Storage.setValue("pairId", id);
+        Application.Storage.setValue("pairCode", code);
+        Application.Storage.setValue("pairUrl", houseUrl());
+    }
+
+    function clearPairingInProgress() as Void {
+        Application.Storage.deleteValue("pairId");
+        Application.Storage.deleteValue("pairCode");
+        Application.Storage.deleteValue("pairUrl");
     }
 
     //! What the integration shows when pairing: the watch's identity

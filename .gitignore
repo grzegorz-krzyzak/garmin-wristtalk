@@ -3,3 +3,6 @@ bin/
 *.iq
 source-dev/
 .dev-house-url
+manifest-beta.xml
+beta.jungle
+__pycache__/
