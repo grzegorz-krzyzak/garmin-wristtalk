@@ -182,6 +182,7 @@ function pairingShowsTheCodeAndStoresTheKey(logger as Test.Logger) as Boolean {
     var c = t[0] as Conversation;
     var client = t[1] as FakeClient;
     c.startOnce();
+    c.onKeyReread();  // no key at the second read either
     Test.assertEqual(c.state, STATE_PAIRING);
     Test.assertEqual(client.calls[0], "pair");
     client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
@@ -208,6 +209,7 @@ function aLostConnectionKeepsThePairingCode(logger as Test.Logger) as Boolean {
     var c = t[0] as Conversation;
     var client = t[1] as FakeClient;
     c.startOnce();
+    c.onKeyReread();  // no key at the second read either
     client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
     c.pairing.poll();
     client.answer(RESULT_NO_PHONE, -104, null);
@@ -223,6 +225,7 @@ function aLostConnectionKeepsThePairingCode(logger as Test.Logger) as Boolean {
     c = t[0] as Conversation;
     client = t[1] as FakeClient;
     c.startOnce();
+    c.onKeyReread();
     client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
     c.pairing.poll();
     client.answer(RESULT_EXPIRED, 410, null);
@@ -238,6 +241,7 @@ function pairingWaitsForAddWatchInHomeAssistant(logger as Test.Logger) as Boolea
     var c = t[0] as Conversation;
     var client = t[1] as FakeClient;
     c.startOnce();
+    c.onKeyReread();  // no key at the second read either
     client.answer(RESULT_PAIRING_CLOSED, 403, { "error" => "pairing_closed" });
     Test.assertEqual(c.state, STATE_PAIRING);
     Test.assertEqual(c.pairing.notice, Settings.text(Rez.Strings.PairOpenInHa));
@@ -251,6 +255,7 @@ function noAddressAsksForTheSetting(logger as Test.Logger) as Boolean {
     Application.Properties.setValue("houseUrl", "");
     var c = t[0] as Conversation;
     c.startOnce();
+    c.onKeyReread();  // no key at the second read either
     Test.assertEqual(c.pairing.notice, Settings.text(Rez.Strings.PairNoAddress));
     Test.assertEqual((t[1] as FakeClient).calls.size(), 0);
     ConversationTests.tearDown(c);
@@ -436,6 +441,7 @@ function pairingHasNoIdleTime(logger as Test.Logger) as Boolean {
     var t = ConversationTests.setUp(false);
     var c = t[0] as Conversation;
     c.startOnce();
+    c.onKeyReread();  // no key at the second read either
     Test.assertEqual(c.state, STATE_PAIRING);
     Test.assert(!c.idle.armed);
     ConversationTests.tearDown(c);
@@ -448,12 +454,14 @@ function aKeptPairingCollectsTheKeyAfterTheAppOpensAgain(logger as Test.Logger) 
     var c = t[0] as Conversation;
     var client = t[1] as FakeClient;
     c.startOnce();
+    c.onKeyReread();  // no key at the second read either
     client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
     // The app closes (BACK); the code is typed in Home Assistant; the app opens again
     c.shutdown();
     var client2 = new FakeClient();
     var c2 = new Conversation(client2, new FakeRecorder(), new FakePlayer());
     c2.startOnce();
+    c2.onKeyReread();
     Test.assertEqual(client2.calls[0], "poll:p1");
     Test.assertEqual(c2.pairing.code, "482913");
     client2.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret" });
@@ -470,6 +478,7 @@ function aKeptPairingThatEndedStartsANewOne(logger as Test.Logger) as Boolean {
     var c = t[0] as Conversation;
     var client = t[1] as FakeClient;
     c.startOnce();
+    c.onKeyReread();  // no key at the second read either
     Test.assertEqual(client.calls[0], "poll:old");
     client.answer(RESULT_EXPIRED, 410, null);
     Test.assert(Settings.pairingInProgress() == null);
@@ -484,6 +493,7 @@ function nothingAsksTheHouseInTheBackground(logger as Test.Logger) as Boolean {
     var c = t[0] as Conversation;
     var client = t[1] as FakeClient;
     c.startOnce();
+    c.onKeyReread();  // no key at the second read either
     client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
     c.onBackground();
     var before = client.calls.size();
@@ -517,6 +527,7 @@ function anUnpairedWatchHasNoPairAgain(logger as Test.Logger) as Boolean {
     var c = t[0] as Conversation;
     var client = t[1] as FakeClient;
     c.startOnce();
+    c.onKeyReread();  // no key at the second read either
     Test.assert(!c.canPairAgain());
     c.pairAgain();
     Test.assertEqual(client.calls.indexOf("repair:null"), -1);
@@ -1028,8 +1039,41 @@ function theHttpsStartOfTheAddressIsNoAddressYet(logger as Test.Logger) as Boole
     Application.Properties.setValue("houseUrl", "https://");
     var c = t[0] as Conversation;
     c.startOnce();
+    c.onKeyReread();  // no key at the second read either
     Test.assertEqual(c.pairing.notice, Settings.text(Rez.Strings.PairNoAddress));
     Test.assertEqual((t[1] as FakeClient).calls.size(), 0);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aKeyFoundAtTheSecondReadStartsAsUsual(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(false);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    // Nothing yet: no pairing, no request, nothing on screen
+    Test.assertEqual(c.state, STATE_CONNECTING);
+    Test.assert(!c.connectingShown);
+    Test.assertEqual(client.calls.size(), 0);
+    Settings.setKey("k1");
+    c.onKeyReread();
+    Test.assertEqual(c.state, STATE_CONNECTING);
+    Test.assertEqual(client.calls[0], "ping");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function noKeyAtTheSecondReadPairs(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(false);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    Test.assertEqual(client.calls.size(), 0);
+    c.onKeyReread();
+    Test.assertEqual(c.state, STATE_PAIRING);
+    Test.assertEqual(client.calls[0], "pair");
     ConversationTests.tearDown(c);
     return true;
 }

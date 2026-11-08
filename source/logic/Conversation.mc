@@ -34,6 +34,7 @@ enum EntryKind {
 //! so the tests can use fakes.
 class Conversation {
 
+    const KEY_REREAD_MS = 500;           // no key at the start: read once more before pairing
     const CONNECTING_SHOW_MS = 500;      // "Connecting…" only when the check takes longer than this,
     const CONNECTING_MIN_MS = 1000;      // and then on screen at least this long - no flash
     const CONNECTING_CAP_MS = 10000;     // no answer: a connection error
@@ -120,15 +121,36 @@ class Conversation {
         }
         _started = true;
         if (Settings.key() == null) {
-            beginPairing();
+            // A paired watch once opened on pairing with its key still stored (2026-11-08): the key
+            // is read once more after a moment; nothing shows meanwhile
+            state = STATE_CONNECTING;
+            connectingShown = false;
+            waitThen(KEY_REREAD_MS, method(:onKeyReread));
             return;
         }
+        startWithKey();
+    }
+
+    //! The second read of the key at the start: still none - pairing
+    function onKeyReread() as Void {
+        if (state != STATE_CONNECTING) {
+            return;
+        }
+        if (Settings.key() == null) {
+            beginPairing();
+        } else {
+            startWithKey();
+        }
+    }
+
+    private function startWithKey() as Void {
         if (Settings.listenOnOpen()) {
             state = STATE_CONNECTING;
             connectingShown = false;
             _pingResult = null;
             waitThen(CONNECTING_SHOW_MS, method(:onConnectingSlow));
         } else {
+            state = STATE_IDLE;
             armIdleExit(Settings.idleExitMs());
         }
         _client.ping(method(:onPing));

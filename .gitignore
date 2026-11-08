@@ -6,3 +6,4 @@ source-dev/
 manifest-beta.xml
 beta.jungle
 __pycache__/
+.DS_Store

@@ -52,8 +52,9 @@ module Bubbles {
         return item;
     }
 
-    function dotsItem(right as Boolean, fill as Number) as Array {
-        return [ITEM_DOTS, null, right, fill, 0];
+    //! [kind, null, right, fill, pulse] - pulse: the three dots light up together instead of in turn
+    function dotsItem(right as Boolean, fill as Number, pulse as Boolean) as Array {
+        return [ITEM_DOTS, null, right, fill, pulse];
     }
 
     function dividerItem(dc as Dc, text as String, font as FontDefinition) as Array {
@@ -82,7 +83,9 @@ module Bubbles {
             tops.add(total);
             total += itemHeight(dc, items[i], font);
         }
-        var area = bottom - top;
+        // Whole pixels: a fraction (h * 0.86) made the clip a pixel shorter than the scroll limit, and the
+        // last bubble lost its bottom row when scrolled to the end
+        var area = bottom.toNumber() - top.toNumber();
         var overflow = total > area ? (total - area).toNumber() : 0;
         var base = anchor >= 0 && anchor < tops.size() ? tops[anchor] : overflow;
         if (base > overflow) {
@@ -121,7 +124,7 @@ module Bubbles {
     function drawItem(dc as Dc, item as Array, font as FontDefinition, y as Numeric, tick as Number) as Void {
         var kind = item[0];
         if (kind == ITEM_DOTS) {
-            drawDotsBubble(dc, y, item[2] as Boolean, item[3] as Number, tick);
+            drawDotsBubble(dc, y, item[2] as Boolean, item[3] as Number, tick, item[4] as Boolean);
         } else if (kind == ITEM_TEXT) {
             drawBubble(dc, item[1] as Array<String>, font, y, item[2] as Boolean, item[3] as Number,
                 item[4] as Number);
@@ -168,15 +171,20 @@ module Bubbles {
     }
 
     //! "Typing…": three dots lighting up in turn inside a small bubble where the text will appear
-    function drawDotsBubble(dc as Dc, top as Numeric, right as Boolean, fill as Number, tick as Number) as Void {
+    function drawDotsBubble(dc as Dc, top as Numeric, right as Boolean, fill as Number, tick as Number,
+            pulse as Boolean) as Void {
         var w = dc.getWidth();
         var left = right ? w * SIDE_RIGHT - DOTS_WIDTH : w * SIDE_LEFT;
         dc.setColor(fill, Graphics.COLOR_TRANSPARENT);
         dc.fillRoundedRectangle(left, top, DOTS_WIDTH, DOTS_HEIGHT, RADIUS);
+        // Typing: one dot lit after another. Pulse: all three light and dim together, half a
+        // second each (ticks of 100 ms), a little larger when lit
         var active = (tick / 3) % 3;
+        var lit = (tick / 5) % 2 == 0;
         for (var i = 0; i < 3; i++) {
-            dc.setColor(i == active ? Graphics.COLOR_WHITE : Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.fillCircle(left + DOTS_WIDTH / 2 + (i - 1) * 14, top + DOTS_HEIGHT / 2, 3);
+            var on = pulse ? lit : i == active;
+            dc.setColor(on ? Graphics.COLOR_WHITE : Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
+            dc.fillCircle(left + DOTS_WIDTH / 2 + (i - 1) * 14, top + DOTS_HEIGHT / 2, pulse && on ? 4 : 3);
         }
     }
 

@@ -212,13 +212,14 @@ class AssistView extends WatchUi.View {
             anchor = items.size();
             items.add(Bubbles.textItem(dc, c.heard, font, true, Bubbles.COMMAND_BUBBLE, Graphics.COLOR_WHITE));
         } else if (c.state == STATE_LISTENING || c.state == STATE_RECOGNIZING) {
-            // Blue "typing" dots where the command will appear: the voice is being taken in; grey
-            // dots stay for the agent answering
+            // Blue "typing" dots where the command will appear: the voice is being taken in; while
+            // it is recognised the three pulse together (listening and recognising looked the
+            // same). Grey dots stay for the agent answering
             anchor = items.size();
-            items.add(Bubbles.dotsItem(true, Bubbles.COMMAND_BUBBLE));
+            items.add(Bubbles.dotsItem(true, Bubbles.COMMAND_BUBBLE, c.state == STATE_RECOGNIZING));
         }
         if (c.state == STATE_SENDING && c.reply.length() == 0) {
-            items.add(Bubbles.dotsItem(false, Bubbles.REPLY_BUBBLE));
+            items.add(Bubbles.dotsItem(false, Bubbles.REPLY_BUBBLE, false));
         } else if (c.reply.length() > 0 && c.state != STATE_ERROR) {
             items.add(Bubbles.textItem(dc, c.reply, font, false, Bubbles.REPLY_BUBBLE, Graphics.COLOR_WHITE));
         }
