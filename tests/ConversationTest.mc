@@ -699,6 +699,34 @@ function anEmptyIdleScreenPulsesUntilStart(logger as Test.Logger) as Boolean {
 }
 
 (:test)
+function theStartArcBlinksByTheClockNotByTicks(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    Application.Properties.setValue("listenOnOpen", false);
+    var c = t[0] as Conversation;
+    c.startOnce();
+    var t0 = System.getTimer();
+    Test.assert(c.pulsing && c.pulseOn);
+    // Fast ticks in between do not switch it
+    c.stepPulse(t0 + 100);
+    c.stepPulse(t0 + 200);
+    Test.assert(c.pulseOn);
+    c.stepPulse(t0 + 1000);
+    Test.assert(!c.pulseOn);
+    c.stepPulse(t0 + 1100);
+    Test.assert(!c.pulseOn);
+    c.stepPulse(t0 + 1800);
+    Test.assert(c.pulseOn);
+    // Not pulsing: the arc is on
+    c.stepPulse(t0 + 2600);
+    Test.assert(!c.pulseOn);
+    c.onSelect();
+    c.stepPulse(t0 + 2700);
+    Test.assert(!c.pulsing && c.pulseOn);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
 function errorsInARowKeepTheAppOpen(logger as Test.Logger) as Boolean {
     var t = ConversationTests.setUp(true);
     var c = t[0] as Conversation;
@@ -1051,6 +1079,47 @@ function anErrorSaysWhetherStartHelps(logger as Test.Logger) as Boolean {
     client.answer(RESULT_UPDATE_INTEGRATION, 501, null);
     Test.assertEqual(c.error, Settings.text(Rez.Strings.ErrUpdateIntegration));
     Test.assertEqual(c.errorHint, "");
+    // To be fixed elsewhere: no blinking arc, and START does nothing
+    Test.assert(!c.canRetry && !c.waitingForStart());
+    c.onSelect();
+    Test.assertEqual(c.state, STATE_ERROR);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function speechToTextFailingIsWorthAnotherTry(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_STT_FAILED, 424, null);
+    Test.assertEqual(c.error, Settings.text(Rez.Strings.ErrSttFailed));
+    Test.assertEqual(c.errorHint, Settings.text(Rez.Strings.StartToRetry));
+    Test.assert(c.canRetry && c.waitingForStart());
+    c.onSelect();
+    Test.assertEqual(c.state, STATE_LISTENING);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function anAddressSetWhilePairingStartsPairingAgain(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(false);
+    Application.Properties.setValue("houseUrl", "");
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    c.onKeyReread();
+    Test.assertEqual(c.state, STATE_PAIRING);
+    Test.assertEqual(c.pairing.notice, Settings.text(Rez.Strings.PairNoAddress));
+    Test.assertEqual(client.calls.size(), 0);
+    // The address typed in the Connect IQ app: pairing goes on without START
+    Application.Properties.setValue("houseUrl", "https://house.example");
+    c.onSettingsChanged();
+    Test.assertEqual(c.pairing.notice, Settings.text(Rez.Strings.PairOpenInHa));
+    Test.assertEqual(client.calls[0], "pair");
     ConversationTests.tearDown(c);
     return true;
 }

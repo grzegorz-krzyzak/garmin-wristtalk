@@ -49,8 +49,8 @@ class Conversation {
     const CONVERSATION_TIMEOUT_MS = 300000;  // Home Assistant's chat session: 5 minutes
     const HISTORY_SIZE = 6;
     const TICK_MS = 100;
-    const PULSE_MS = 250;                // the START arc breathing while the app waits for START: one
-                                         // step of its width (the view's BREATH, 2 s there and back)
+    const PULSE_MS = 800;                // the START arc blinking while the app waits for START: on
+                                         // 800 ms, off 800 ms (the breathing width was hard to see)
     const POPUP_MS = 1500;               // a confirmation; a problem stays until START or BACK
 
     var state as State = STATE_IDLE;
@@ -59,12 +59,18 @@ class Conversation {
     var error as String = "";
     //! Under the error, what to do: START to try again, the app closing, or "" (the message says it)
     var errorHint as String = "";
+    //! The error on screen goes away with another try (START); false: something is to be done
+    //! elsewhere, so START does nothing and has no arc
+    var canRetry as Boolean = true;
     var popup as String = "";
     var popupKind as PopupKind = POPUP_PAIRED;
     //! What the screen shows of `state` - waiting states without flashing by (ShownState)
     var shown as ShownState = new ShownState();
     //! Idle with nothing in the conversation: the START arc pulses (ticks every PULSE_MS)
     var pulsing as Boolean = false;
+    //! While pulsing: the START arc on (true) or off. Switched by the clock every PULSE_MS, not by
+    //! counting ticks - the fast ticks (a popup, the screen catching up) may come in between
+    var pulseOn as Boolean = true;
     var tick as Number = 0;
     //! Counts the commands begun (and a cleared conversation): the view scrolls back to the latest
     var commandCount as Number = 0;
@@ -101,6 +107,7 @@ class Conversation {
     private var _animating as Boolean = false;
     private var _ticking as Boolean = false;
     private var _popupUntil as Number = 0;   // 0 = stays until dismissed
+    private var _pulseAt as Number = 0;      // when pulseOn last switched
 
     var pairing as Pairing;
     var idle as IdleClose;
@@ -194,10 +201,14 @@ class Conversation {
         }
     }
 
-    //! Settings changed in the Connect IQ app: a new address (the key belongs to the old one)
+    //! Settings changed in the Connect IQ app: a new address (the key belongs to the old one). While
+    //! pairing without a code yet (no address, "Add watch" not open) it starts again with the new
+    //! settings - before, the address asked for stayed on screen until START, which nothing showed
     function onSettingsChanged() as Void {
         if (Settings.key() == null && state != STATE_PAIRING) {
             reconnect();
+        } else if (state == STATE_PAIRING && pairing.code.length() == 0 && !_inBackground) {
+            pairing.begin();
         }
         WatchUi.requestUpdate();
     }
@@ -280,7 +291,7 @@ class Conversation {
         } else if (state == STATE_PLAYING || state == STATE_LOADING_VOICE) {
             _player.stop();
             listen();
-        } else if (state == STATE_IDLE || state == STATE_ERROR) {
+        } else if (state == STATE_IDLE || (state == STATE_ERROR && canRetry)) {
             listen();
         }
     }
@@ -710,6 +721,7 @@ class Conversation {
         setState(STATE_ERROR, SHOW_AFTER_HOLD);
         error = message;
         errorHint = retryHelps ? Settings.text(Rez.Strings.StartToRetry) : "";
+        canRetry = retryHelps;
         armIdleExit(Settings.idleExitMs());
         WatchUi.requestUpdate();
     }
@@ -832,11 +844,12 @@ class Conversation {
         return history.size() == 0 && heard.length() == 0 && reply.length() == 0 && error.length() == 0;
     }
 
-    //! The START arc pulses while the app waits for START: an empty conversation, "nothing heard",
-    //! an error; it shines steadily where START only may be pressed
+    //! The START arc: it blinks where nothing is to be read or heard
+    //! and START is the only step - an empty conversation, "nothing heard", an error START may fix;
+    //! it shines where START works but is not the only step; none where START does nothing
     function waitingForStart() as Boolean {
         return (state == STATE_IDLE && (isEmpty() || (popup.length() > 0 && _popupUntil == 0)))
-            || state == STATE_ERROR;
+            || (state == STATE_ERROR && canRetry);
     }
 
     private function updatePulse() as Void {
@@ -847,7 +860,23 @@ class Conversation {
         }
     }
 
+    //! The blink: on, then off, PULSE_MS each; on again whenever the pulse is not running. Half a
+    //! tick of slack - a timer may fire a little early
+    function stepPulse(now as Number) as Void {
+        if (!pulsing) {
+            pulseOn = true;
+            _pulseAt = now;
+        } else if (now - _pulseAt >= PULSE_MS - TICK_MS / 2) {
+            pulseOn = !pulseOn;
+            _pulseAt = now;
+        }
+    }
+
     private function startPulse() as Void {
+        if (!pulsing) {
+            pulseOn = true;
+            _pulseAt = System.getTimer();
+        }
         if (!_ticking) {
             _ticking = true;
             _tickTimer.start(method(:onTick), PULSE_MS, true);
@@ -899,6 +928,7 @@ class Conversation {
     function onTick() as Void {
         var now = System.getTimer();
         tick++;
+        stepPulse(now);
         checkChunks(now);
         shown.update(now);
         if (popup.length() > 0 && _popupUntil > 0 && now >= _popupUntil) {

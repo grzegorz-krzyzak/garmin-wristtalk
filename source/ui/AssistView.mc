@@ -22,8 +22,6 @@ class AssistView extends WatchUi.View {
                                // status line and the watch's own microphone (at 0.045 it touched
                                // it, at 0.028 it touched the screen's edge)
     const STATUS_Y = 0.09;     // the status line (top), of the screen height
-    // The START arc breathes - its width, as this screen has only four greys
-    const BREATH = [3, 4, 5, 6, 6, 5, 4, 3];
 
     private var _c as Conversation;
     private var _scroller as Scroller;
@@ -162,6 +160,7 @@ class AssistView extends WatchUi.View {
         } else if (s == STATE_ERROR) {
             status = Settings.text(Rez.Strings.StatusError);
             color = Graphics.COLOR_ORANGE;
+            hint = c.canRetry;  // to be fixed elsewhere: START does nothing
         }
         // While listening the watch shows its own microphone in the middle of the top: it is the
         // recording light, so there is no status
@@ -174,12 +173,12 @@ class AssistView extends WatchUi.View {
         if (Capabilities.hasSpeaker()) {
             drawSpeaker(dc, w / 2, ICON_Y * h, Settings.textOnly(), 1, Graphics.COLOR_LT_GRAY);
         }
-        // The START arc: pulsing while the app waits for START, steady where START may be pressed,
-        // none where it does nothing. An empty idle screen also says what to do.
+        // The START arc: blinking while the app waits for START (Conversation.pulseOn), steady where
+        // START may be pressed, none where it does nothing. An empty idle screen also says what to do.
         var empty = s == STATE_IDLE && c.isEmpty();
-        if (hint) {
-            var breathing = c.waitingForStart() && c.pulsing;
-            drawStartHint(dc, Graphics.COLOR_LT_GRAY, breathing ? BREATH[c.tick % BREATH.size()] as Number : 5);
+        var blinkedOff = c.waitingForStart() && c.pulsing && !c.pulseOn;
+        if (hint && !blinkedOff) {
+            drawStartHint(dc, Graphics.COLOR_LT_GRAY, 5);
         }
         if (empty && c.popup.length() == 0) {
             drawLines(dc, Settings.text(Rez.Strings.PressStartToSpeak), Graphics.FONT_XTINY, h * 0.42,
@@ -211,11 +210,11 @@ class AssistView extends WatchUi.View {
             anchor = items.size();
             items.add(Bubbles.textItem(dc, c.heard, font, true, Bubbles.COMMAND_BUBBLE, Graphics.COLOR_WHITE));
         } else if (taking) {
-            // Blue "typing" dots where the command will appear: the voice is being taken in; while
-            // it is recognised the three pulse together (listening and recognising looked the
-            // same). Grey dots stay for the agent answering
+            // Blue dots where the command will appear. Listening: the three pulse together - the
+            // voice coming in; recognising: they light up in turn, as the grey dots of the agent
+            // answering - a result being worked out (the two states must not look the same)
             anchor = items.size();
-            items.add(Bubbles.dotsItem(true, Bubbles.COMMAND_BUBBLE, s == STATE_RECOGNIZING));
+            items.add(Bubbles.dotsItem(true, Bubbles.COMMAND_BUBBLE, s == STATE_LISTENING));
         }
         if (s == STATE_SENDING) {
             // The reply waits for "Thinking" to have stayed its minimum
@@ -363,13 +362,6 @@ class AssistView extends WatchUi.View {
             dc.drawArc(x + 1 * k, y, 5 * k, Graphics.ARC_COUNTER_CLOCKWISE, -40, 40);
         }
         dc.setPenWidth(1);
-    }
-
-    //! Listening: a small red dot next to "Listening…" pulsing softly - the usual recording light
-    private function drawRecordingDot(dc as Dc, x as Numeric, y as Numeric, tick as Number) as Void {
-        var shades = [0xAA0000, 0xFF0000];
-        dc.setColor(shades[(tick / 8) % shades.size()], Graphics.COLOR_TRANSPARENT);
-        dc.fillCircle(x, y, 4);
     }
 
     //! Garmin-style hint: an arc on the bezel next to the START button

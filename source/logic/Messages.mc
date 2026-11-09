@@ -22,10 +22,11 @@ module Messages {
         return Lang.format(Settings.text(Rez.Strings.ErrConnection), [result.code]);
     }
 
-    //! Whether START helps; not when something is to be done elsewhere (an update, the address,
-    //! speech-to-text in Home Assistant) - the message says what
+    //! Whether START helps; not when something is to be done elsewhere (an update, the address) -
+    //! the message says what. Speech-to-text failing is worth another try: the integration sends it
+    //! at the third failure in a row (a short sound before the speech), the next command may pass
     function retryHelps(result as Result) as Boolean {
         return result.kind != RESULT_UPDATE_APP && result.kind != RESULT_UPDATE_INTEGRATION
-            && result.kind != RESULT_HTTPS && result.kind != RESULT_NO_ADDRESS && result.kind != RESULT_STT_FAILED;
+            && result.kind != RESULT_HTTPS && result.kind != RESULT_NO_ADDRESS;
     }
 }

@@ -14,7 +14,7 @@ class ShownState {
 
     // 700 ms from the measured end of the VAD to the text (39-1257 ms, median 562
     // in 9 commands: "Recognising" shows only where the wait is noticeable); 500 ms is enough to
-    // read one word (an eye fixation is about 200-250 ms) and one pulse of the dots
+    // read one word (an eye fixation is about 200-250 ms) and see the dots move
     const SHOW_MS = 700;
     const MIN_MS = 500;
 

@@ -177,10 +177,10 @@ module Bubbles {
         var left = right ? w * SIDE_RIGHT - DOTS_WIDTH : w * SIDE_LEFT;
         dc.setColor(fill, Graphics.COLOR_TRANSPARENT);
         dc.fillRoundedRectangle(left, top, DOTS_WIDTH, DOTS_HEIGHT, RADIUS);
-        // Typing: one dot lit after another. Pulse: all three light and dim together, half a
-        // second each (ticks of 100 ms), a little larger when lit
+        // Typing: one dot lit after another. Pulse: all three light and dim together, 800 ms
+        // each (ticks of 100 ms; 500 ms looked hurried while listening), a little larger when lit
         var active = (tick / 3) % 3;
-        var lit = (tick / 5) % 2 == 0;
+        var lit = (tick / 8) % 2 == 0;
         for (var i = 0; i < 3; i++) {
             var on = pulse ? lit : i == active;
             dc.setColor(on ? Graphics.COLOR_WHITE : Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);

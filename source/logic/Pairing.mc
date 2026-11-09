@@ -51,8 +51,9 @@ class Pairing {
             WatchUi.requestUpdate();
             return;
         }
-        // What to do shows from the first moment - no passing "connecting" state that flashes by
-        if (notice.length() == 0) {
+        // What to do shows from the first moment - no passing "connecting" state that flashes by;
+        // "set the address" is stale once there is one
+        if (notice.length() == 0 || notice.equals(Settings.text(Rez.Strings.PairNoAddress))) {
             notice = Settings.text(Rez.Strings.PairOpenInHa);
         }
         _client.pair(Settings.watchInfo(), method(:onPair));
