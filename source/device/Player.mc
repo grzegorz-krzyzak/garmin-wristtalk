@@ -156,6 +156,7 @@ class VoiceSource extends Audio.Output.StreamingAudioSource {
     var finishing as Boolean = false;
 
     private var _waiting as ByteArray = []b;
+    private var _taken as Number = 0;          // of _waiting, handed to the player already
     private var _ended as Boolean = false;
     private var _onError as Method() as Void;
 
@@ -165,6 +166,10 @@ class VoiceSource extends Audio.Output.StreamingAudioSource {
     }
 
     function add(data as ByteArray) as Void {
+        if (_taken > 0) {
+            _waiting = _waiting.slice(_taken, null);
+            _taken = 0;
+        }
         _waiting.addAll(data);
         hand(getBufferSize());
     }
@@ -182,14 +187,15 @@ class VoiceSource extends Audio.Output.StreamingAudioSource {
         _onError.invoke();
     }
 
-    //! As much as the player takes; the end once everything is taken
+    //! As much as the player takes - only that much is copied, not the rest each time (a large
+    //! piece is handed over in many calls while it plays); the end once everything is taken
     private function hand(room as Number) as Void {
-        if (_waiting.size() > 0 && room > 0) {
-            var count = _waiting.size() < room ? _waiting.size() : room;
-            var took = append(_waiting.slice(0, count));
-            _waiting = _waiting.slice(took, null);
+        var left = _waiting.size() - _taken;
+        if (left > 0 && room > 0) {
+            var count = left < room ? left : room;
+            _taken += append(_waiting.slice(_taken, _taken + count));
         }
-        if (finishing && _waiting.size() == 0 && !_ended) {
+        if (finishing && _taken >= _waiting.size() && !_ended) {
             _ended = true;
             end();
         }

@@ -941,9 +941,10 @@ class Conversation {
         stepPulse(now);
         checkChunks(now);
         checkVoice(now);
-        shown.update(now);
+        var changed = shown.update(now);
         if (popup.length() > 0 && _popupUntil > 0 && now >= _popupUntil) {
             popup = "";
+            changed = true;
         }
         if (_fastTicks && !fastTicksNeeded()) {
             _tickTimer.stop();
@@ -955,7 +956,12 @@ class Conversation {
                 _tickTimer.start(method(:onTick), PULSE_MS, true);
             }
         }
-        WatchUi.requestUpdate();
+        // While the voice plays the ticks only watch it: the screen is drawn when something on it
+        // changes (the voice's states ask for it themselves) - not ten times a second over the
+        // playing, which crackled now and then on long replies (fēnix 8, 2026-11-10)
+        if (changed || _animating || pulsing || _voice == null) {
+            WatchUi.requestUpdate();
+        }
     }
 
     //! A small framed note in the middle for `ms`, or until dismissed when `ms` is 0
