@@ -38,6 +38,8 @@
     <string id="ErrMicStopped">The microphone stopped.</string>
     <string id="NotHeard">I did not hear anything</string>
     <string id="NotHeardHint">Press START to say it again</string>
+    <string id="VoiceNotArrived">Voice did not arrive</string>
+    <string id="VoiceCutOff">Voice cut off</string>
     <string id="ErrNoPhone">No connection to the phone.</string>
     <string id="ErrTimeout">The house is not answering - try again shortly.</string>
     <string id="ErrTooLong">The command is too long - say it shorter.</string>

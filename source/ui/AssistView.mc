@@ -238,7 +238,7 @@ class AssistView extends WatchUi.View {
             var kind = c.popupKind;
             drawNotice(dc, lineY,
                 kind == POPUP_PAIRED ? NOTICE_DONE : kind == POPUP_NOT_HEARD ? NOTICE_QUESTION
-                    : kind == POPUP_TEXT_ONLY ? NOTICE_SPEAKER_OFF : NOTICE_SPEAKER,
+                    : kind == POPUP_TEXT_ONLY || kind == POPUP_VOICE_FAILED ? NOTICE_SPEAKER_OFF : NOTICE_SPEAKER,
                 c.popup, kind == POPUP_NOT_HEARD ? Settings.text(Rez.Strings.NotHeardHint) : "");
             return;
         }

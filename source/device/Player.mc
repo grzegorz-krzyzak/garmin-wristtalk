@@ -1,54 +1,197 @@
 import Toybox.Audio;
 import Toybox.Lang;
+import Toybox.System;
 
-//! The speaker: plays the reply (Ogg/Opus 16 kHz mono) received at run time.
+//! The speaker: plays the reply's voice (Ogg/Opus 16 kHz mono) while it is still coming - a
+//! streaming source takes the bytes as it has room. Measured on the fēnix 8 (2026-11-10): an Ogg
+//! cut anywhere plays; a source that runs dry stops for good without telling (no error, no state) -
+//! `pause()` and `resume()` start it again from where it stopped; a new stream from a page works
+//! too and repeats that page. Which to do and when the voice logic decides; this only plays.
 class Player {
 
-    private var _onDone as Method() as Void or Null;
+    const BUFFER = 8192;   // as tested on the watch
+    // A stopped stream's "stopped" comes late - after the next one started (seen on the fēnix 8)
+    const LATE_STOP_MS = 1500;
+
+    private var _onDone as Method(ok as Boolean) as Void or Null;
+    private var _source as VoiceSource?;
     private var _playing as Boolean = false;
+    private var _restartedAt as Number = -LATE_STOP_MS;
 
     function initialize() {
     }
 
-    //! Returns false when the audio cannot be played (the reply text stays on screen)
-    function play(data as ByteArray, volume as Number, onDone as Method() as Void) as Boolean {
+    //! Starts playing `data`; false when it cannot (the reply text stays). `whole`: that is all of
+    //! it - played as one source, as 0.5.x did (a stream ended before it started playing stayed
+    //! silent on the fēnix 8, 2026-11-10: a short reply fits the buffer whole); otherwise more comes
+    //! with add, and finish() ends it. onDone(true): played to the end; onDone(false): the player failed
+    function start(data as ByteArray, volume as Number, whole as Boolean,
+            onDone as Method(ok as Boolean) as Void) as Boolean {
         if (!Capabilities.hasSpeaker()) {
             return false;
         }
         try {
-            var builder = new Audio.Output.DynamicAudioSourceBuilder({
-                :format => {
-                    :containerFormat => Audio.CONTAINER_OGG,
-                    :codec => Audio.CODEC_OPUS,
-                    :frequency => Audio.FREQ_16_KHZ,
-                    :channels => Audio.CHANNEL_MONO
-                }
-            });
-            builder.append(data);
             _onDone = onDone;
             Audio.Output.registerStateChangeHandler(method(:onState));
             Audio.Output.setVolume(volume);
-            Audio.Output.play(builder.complete(), 0);
-            _playing = true;
+            if (whole) {
+                playWhole(data);
+            } else {
+                play(data, false);
+            }
         } catch (e) {
+            _playing = false;
+            _source = null;
             return false;
         }
         return true;
     }
 
+    //! More of the voice
+    function add(data as ByteArray) as Void {
+        if (_source != null) {
+            (_source as VoiceSource).add(data);
+        }
+    }
+
+    //! Nothing more comes: the source ends once the player has taken the rest
+    function finish() as Void {
+        if (_source != null) {
+            (_source as VoiceSource).finish();
+        }
+    }
+
+    //! Where the playing is in the current stream (ms)
+    function position() as Number {
+        return _playing ? Audio.Output.getPosition() : 0;
+    }
+
+    function pause() as Void {
+        if (_playing) {
+            Audio.Output.pause();
+        }
+    }
+
+    function resume() as Void {
+        if (_playing) {
+            Audio.Output.resume();
+        }
+    }
+
+    //! A new stream in place of the current one (`data` begins with the header pages)
+    function restart(data as ByteArray) as Void {
+        if (!_playing) {
+            return;
+        }
+        var finished = _source != null && (_source as VoiceSource).finishing;
+        _restartedAt = System.getTimer();
+        Audio.Output.stop();
+        play(data, finished);
+    }
+
     function stop() as Void {
+        _source = null;
         if (_playing) {
             _playing = false;
             Audio.Output.stop();
         }
     }
 
+    private function playWhole(data as ByteArray) as Void {
+        var builder = new Audio.Output.DynamicAudioSourceBuilder({
+            :format => VoiceSource.FORMAT
+        });
+        builder.append(data);
+        _source = null;
+        _playing = true;
+        Audio.Output.play(builder.complete(), 0);
+    }
+
+    private function play(data as ByteArray, finished as Boolean) as Void {
+        var source = new VoiceSource(BUFFER, method(:onSourceError));
+        source.add(data);
+        if (finished) {
+            source.finish();
+        }
+        _source = source;
+        _playing = true;
+        Audio.Output.play(source, 0);
+    }
+
+    function onSourceError() as Void {
+        end(false);
+    }
+
     function onState(state as Audio.Output.PlaybackState) as Void {
-        if (_playing && (state == Audio.Output.PLAYBACK_STOPPED || state == Audio.Output.PLAYBACK_ERROR)) {
-            _playing = false;
-            if (_onDone != null) {
-                _onDone.invoke();
-            }
+        if (state == Audio.Output.PLAYBACK_STOPPED && System.getTimer() - _restartedAt < LATE_STOP_MS) {
+            return;  // the replaced stream's own end
+        }
+        if (state == Audio.Output.PLAYBACK_STOPPED || state == Audio.Output.PLAYBACK_ERROR) {
+            end(state == Audio.Output.PLAYBACK_STOPPED);
+        }
+    }
+
+    private function end(ok as Boolean) as Void {
+        if (!_playing) {
+            return;
+        }
+        _playing = false;
+        _source = null;
+        if (_onDone != null) {
+            (_onDone as Method(ok as Boolean) as Void).invoke(ok);
+        }
+    }
+}
+
+//! The voice's bytes waiting for the player: handed over as it has room
+class VoiceSource extends Audio.Output.StreamingAudioSource {
+
+    static const FORMAT = {
+        :containerFormat => Audio.CONTAINER_OGG,
+        :codec => Audio.CODEC_OPUS,
+        :frequency => Audio.FREQ_16_KHZ,
+        :channels => Audio.CHANNEL_MONO
+    } as Audio.AudioFormat;
+
+    var finishing as Boolean = false;
+
+    private var _waiting as ByteArray = []b;
+    private var _ended as Boolean = false;
+    private var _onError as Method() as Void;
+
+    function initialize(buffer as Number, onError as Method() as Void) {
+        StreamingAudioSource.initialize({ :format => FORMAT, :bufferSize => buffer });
+        _onError = onError;
+    }
+
+    function add(data as ByteArray) as Void {
+        _waiting.addAll(data);
+        hand(getBufferSize());
+    }
+
+    function finish() as Void {
+        finishing = true;
+        hand(getBufferSize());
+    }
+
+    function onReadyForData(freeSpace as Number) as Void {
+        hand(freeSpace);
+    }
+
+    function onError(error as Audio.Output.Error) as Void {
+        _onError.invoke();
+    }
+
+    //! As much as the player takes; the end once everything is taken
+    private function hand(room as Number) as Void {
+        if (_waiting.size() > 0 && room > 0) {
+            var count = _waiting.size() < room ? _waiting.size() : room;
+            var took = append(_waiting.slice(0, count));
+            _waiting = _waiting.slice(took, null);
+        }
+        if (finishing && _waiting.size() == 0 && !_ended) {
+            _ended = true;
+            end();
         }
     }
 }

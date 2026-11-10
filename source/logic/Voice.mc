@@ -1,0 +1,305 @@
+import Toybox.Lang;
+import Toybox.System;
+
+//! How the reply's voice ended
+enum VoiceEnd {
+    VOICE_DONE,           // played to the end (or the watch cannot play it: the text says it all)
+    VOICE_NOT_ARRIVED,    // none of it played
+    VOICE_CUT_OFF,        // it stopped midway
+    VOICE_UNAUTHORIZED    // the key was refused meanwhile: pair again
+}
+
+//! One request for a piece of the voice; a request given up is abandoned - its late answer is
+//! ignored
+class VoicePieceRequest {
+
+    var abandoned as Boolean = false;
+    private var _onResult as Method(result as Result) as Void;
+
+    function initialize(onResult as Method(result as Result) as Void) {
+        _onResult = onResult;
+    }
+
+    function onResult(result as Result) as Void {
+        if (!abandoned) {
+            _onResult.invoke(result);
+        }
+    }
+}
+
+//! The reply's voice while it is being made (protocol 6): it asks Home Assistant for the pieces
+//! one after another and plays once a few seconds of speech are in hand. A stall (the pieces
+//! slower than the speech) waits for that margin again and revives the player; a voice that does
+//! not come, or stops coming, ends with what played and says so. Time comes from `check(now)` on
+//! the conversation's ticks, so the tests need not wait.
+class Voice {
+
+    // In hand before playing: at the start and after a stall 3 s (no stall followed at the phone's
+    // pace, watch test 3d, 2026-11-10); after a second stall 6 s; after a third the whole voice
+    const MARGIN_MS = 3000;
+    const SECOND_MARGIN_MS = 6000;
+    const WHOLE_AFTER_STALLS = 3;
+    // Giving up: no byte this long after the reply text (normally 3-4 s); no new byte this long
+    // midway; this many failed requests in a row
+    const FIRST_BYTE_MS = 6000;
+    const NO_BYTES_MS = 5000;
+    const FAILURES = 2;
+    // A stall: the position within this much of the speech handed to the player
+    const STALL_SLACK_MS = 300;
+    // A stall shows ("Loading voice") once it has lasted this long - as ShownState.SHOW_MS: a
+    // shorter one is only a gap heard
+    const WAITING_SHOW_MS = 700;
+    // The revival measured on the watch: pause, this long, resume (3b)
+    const PAUSE_MS = 300;
+    // Resumed but not moving this long: a new stream from the stalled page (3c, repeats ~0.7 s)
+    const MOVE_MS = 1000;
+
+    //! The sound has started
+    var playing as Boolean = false;
+    var stalled as Boolean = false;
+
+    private var _client as HaClient;
+    private var _player as Player;
+    private var _session as String;
+    private var _volume as Number;
+    private var _onPlaying as Method() as Void;
+    private var _onWaiting as Method() as Void;
+    private var _onEnd as Method(end as VoiceEnd) as Void;
+    private var _holdLeft as Method(now as Number) as Number;
+
+    private var _pages as OggPages = new OggPages();
+    private var _request as VoicePieceRequest?;
+    private var _failures as Number = 0;
+    private var _cut as Boolean = false;      // nothing more comes, the voice did not end
+    private var _over as Boolean = false;
+    private var _startedAt as Number = 0;
+    private var _lastBytesAt as Number = 0;
+    private var _stalls as Number = 0;
+    private var _stalledAt as Number = -1;
+    private var _waitingShown as Boolean = false;
+    private var _pausedAt as Number = -1;
+    private var _resumedAt as Number = -1;
+    private var _resumePos as Number = 0;
+    private var _base as Number = 0;          // where the current stream starts in the speech (ms)
+
+    function initialize(client as HaClient, player as Player, session as String, volume as Number,
+            onPlaying as Method() as Void, onWaiting as Method() as Void,
+            onEnd as Method(end as VoiceEnd) as Void, holdLeft as Method(now as Number) as Number) {
+        _client = client;
+        _player = player;
+        _session = session;
+        _volume = volume;
+        _onPlaying = onPlaying;
+        _onWaiting = onWaiting;
+        _onEnd = onEnd;
+        _holdLeft = holdLeft;
+    }
+
+    function start(now as Number) as Void {
+        _startedAt = now;
+        _lastBytesAt = now;
+        ask();
+    }
+
+    //! START, BACK, the menu, a new command: silence, nothing more asked
+    function stop() as Void {
+        _over = true;
+        abandon();
+        _player.stop();
+    }
+
+    // --- the pieces ---------------------------------------------------------------------------
+
+    private function ask() as Void {
+        if (_over || _cut || _pages.ended || _request != null) {
+            return;
+        }
+        var request = new VoicePieceRequest(method(:onPiece));
+        _request = request;
+        _client.audioPiece(_session, _pages.size, request.method(:onResult));
+    }
+
+    private function abandon() as Void {
+        if (_request != null) {
+            (_request as VoicePieceRequest).abandoned = true;
+            _request = null;
+        }
+    }
+
+    function onPiece(result as Result) as Void {
+        _request = null;
+        if (_over) {
+            return;
+        }
+        var now = System.getTimer();
+        if (result.ok() && result.data instanceof ByteArray) {
+            var piece = result.data as ByteArray;
+            // A piece that is not whole pages, or skips one, is asked again from the same offset
+            if (!_pages.add(piece)) {
+                failed();
+                return;
+            }
+            _failures = 0;
+            _lastBytesAt = now;
+            if (playing) {
+                _player.add(piece);
+                if (_pages.ended) {
+                    _player.finish();
+                }
+            }
+            ask();
+            check(now);
+            return;
+        }
+        if (result.kind == RESULT_WAITING) {
+            ask();  // nothing new yet - not a failure
+        } else if (result.kind == RESULT_UNAUTHORIZED) {
+            _player.stop();
+            finish(VOICE_UNAUTHORIZED);
+        } else if (result.kind == RESULT_EXPIRED || result.kind == RESULT_NOT_FOUND) {
+            // 410: cut midway (or asked past the end); 404: no voice, or the session is gone
+            cutHere(now);
+        } else {
+            failed();
+        }
+    }
+
+    private function failed() as Void {
+        _failures++;
+        if (_failures >= FAILURES) {
+            cutHere(System.getTimer());
+        } else {
+            ask();
+        }
+    }
+
+    //! Nothing more comes: what is in plays to its end, then "cut off"; nothing in - "did not arrive"
+    private function cutHere(now as Number) as Void {
+        _cut = true;
+        abandon();
+        if (playing) {
+            _player.finish();
+        } else if (_pages.speechMs() == 0) {
+            finish(VOICE_NOT_ARRIVED);
+            return;
+        }
+        check(now);
+    }
+
+    // --- playing ------------------------------------------------------------------------------
+
+    //! On every tick: the limits, starting, a stall and its revival
+    function check(now as Number) as Void {
+        if (_over) {
+            return;
+        }
+        if (!_cut && !_pages.ended
+                && (_pages.size == 0 ? now - _startedAt > FIRST_BYTE_MS : now - _lastBytesAt > NO_BYTES_MS)) {
+            cutHere(now);
+            if (_over) {
+                return;
+            }
+        }
+        if (!playing) {
+            if (ready(0) && _holdLeft.invoke(now) == 0) {
+                begin();
+            }
+            return;
+        }
+        var pos = _base + _player.position();
+        if (_pausedAt >= 0) {
+            if (now - _pausedAt >= PAUSE_MS) {
+                _pausedAt = -1;
+                _player.resume();
+                _resumedAt = now;
+                _resumePos = pos;
+                if (_waitingShown) {
+                    _waitingShown = false;
+                    _onPlaying.invoke();
+                }
+            }
+            return;
+        }
+        if (stalled) {
+            checkStalled(now, pos);
+        } else if (!_pages.ended && !_cut && pos >= _pages.speechMs() - STALL_SLACK_MS) {
+            stalled = true;
+            _stalls++;
+            _stalledAt = now;
+        }
+    }
+
+    private function checkStalled(now as Number, pos as Number) as Void {
+        if (_resumedAt >= 0) {
+            if (pos > _resumePos) {
+                stalled = false;
+                _resumedAt = -1;
+            } else if (now - _resumedAt >= MOVE_MS) {
+                restartAt(pos);
+            }
+            return;
+        }
+        if (!_waitingShown && now - _stalledAt >= WAITING_SHOW_MS) {
+            _waitingShown = true;
+            _onWaiting.invoke();
+        }
+        if (!ready(pos) || _holdLeft.invoke(now) > 0) {
+            return;
+        }
+        if (_pages.speechMs() - pos < STALL_SLACK_MS) {
+            // Cut with nothing left to play: a stalled stream does not end by itself
+            _player.stop();
+            finish(VOICE_CUT_OFF);
+            return;
+        }
+        _player.pause();
+        _pausedAt = now;
+    }
+
+    //! Enough in hand to play on: the margin, or the end (or nothing more coming)
+    private function ready(pos as Number) as Boolean {
+        if (_pages.ended || _cut) {
+            return true;
+        }
+        if (_stalls >= WHOLE_AFTER_STALLS) {
+            return false;
+        }
+        return _pages.speechMs() - pos >= (_stalls >= 2 ? SECOND_MARGIN_MS : MARGIN_MS);
+    }
+
+    private function begin() as Void {
+        // All of it here already (a short reply, or a cut one): played whole, not as a stream
+        if (!_player.start(_pages.bytes(0), _volume, _pages.ended || _cut, method(:onPlayed))) {
+            finish(VOICE_DONE);  // no speaker: the reply text is on screen
+            return;
+        }
+        playing = true;
+        _onPlaying.invoke();
+    }
+
+    //! Resumed and still not moving: a new stream from the stalled page
+    private function restartAt(pos as Number) as Void {
+        var data = _pages.fromPosition(pos);
+        stalled = false;
+        _resumedAt = -1;
+        if (data == null) {
+            _player.stop();
+            finish(VOICE_CUT_OFF);
+            return;
+        }
+        _base = _pages.startMs(pos);
+        _player.restart(data);
+    }
+
+    function onPlayed(ok as Boolean) as Void {
+        if (!_over) {
+            finish(ok && _pages.ended && !_cut ? VOICE_DONE : VOICE_CUT_OFF);
+        }
+    }
+
+    private function finish(end as VoiceEnd) as Void {
+        _over = true;
+        abandon();
+        _onEnd.invoke(end);
+    }
+}

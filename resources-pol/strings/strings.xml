@@ -38,6 +38,8 @@
     <string id="ErrMicStopped">Mikrofon przestał działać.</string>
     <string id="NotHeard">Nic nie usłyszałem</string>
     <string id="NotHeardHint">Naciśnij START, aby powiedzieć jeszcze raz</string>
+    <string id="VoiceNotArrived">Głos nie dotarł</string>
+    <string id="VoiceCutOff">Głos się urwał</string>
     <string id="ErrNoPhone">Brak połączenia z telefonem.</string>
     <string id="ErrTimeout">Dom nie odpowiada - spróbuj za chwilę.</string>
     <string id="ErrTooLong">Komenda za długa - powiedz krócej.</string>

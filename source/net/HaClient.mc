@@ -4,12 +4,12 @@ import Toybox.Lang;
 //! What a request ended with, in plain kinds the logic can act on
 enum ResultKind {
     RESULT_OK,
-    RESULT_WAITING,           // 202 - the reply's voice is still being made: ask again
+    RESULT_WAITING,           // 202 - nothing new of the reply's voice yet: ask again
     RESULT_UNAUTHORIZED,      // 401 - the key was rejected: pair again
     RESULT_PAIRING_CLOSED,    // 403 - "Add watch" is not open in Home Assistant
     RESULT_NOT_FOUND,         // 404
     RESULT_BUSY,              // 409
-    RESULT_EXPIRED,           // 410 - the pairing ended
+    RESULT_EXPIRED,           // 410 - the pairing ended; the voice stopped (cut, or past its end)
     RESULT_TOO_LARGE,         // 413
     RESULT_TOO_MANY,          // 429
     RESULT_STT_FAILED,        // 424 - speech recognition failed a third time in a row
@@ -57,8 +57,8 @@ class HaClient {
 
     // Raised with the integration on every change one side sends or expects (the table: the
     // integration's design notes); 2: waits within 4 s, audio 202, a timed-out request repeated;
-    // 3: POST repair - "Pair again" from the menu
-    const PROTOCOL = "5";
+    // 3: POST repair - "Pair again" from the menu; 6: the voice in pieces while it is made
+    const PROTOCOL = "6";
     const API = "/api/wristtalk/v1/";
 
     private var _app as String;
@@ -110,9 +110,11 @@ class HaClient {
         jsonPost("reply/" + session, {} as Dictionary<Object, Object>, Settings.key(), done, true);
     }
 
-    //! The reply's voice; RESULT_WAITING (202, after 4 s) while it is being made
-    function audio(session as String, done as Method(result as Result) as Void) as Void {
-        request("audio/" + session, {
+    //! The reply's voice from `offset` while it is being made (protocol 6): whole Ogg pages - the
+    //! first answer holds a few seconds of speech or the whole; RESULT_WAITING (202, after 4 s)
+    //! when nothing new came; RESULT_EXPIRED (410) when it stopped; RESULT_NOT_FOUND (404): none
+    function audioPiece(session as String, offset as Number, done as Method(result as Result) as Void) as Void {
+        request("audio/" + session + "/" + offset, {
             :method => Communications.HTTP_REQUEST_METHOD_GET,
             :headers => buildHeaders(Settings.key()),
             :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_OCTET_STREAM

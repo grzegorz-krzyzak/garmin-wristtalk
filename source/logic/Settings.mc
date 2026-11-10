@@ -10,7 +10,7 @@ module Settings {
 
     //! The same as the version in manifest.xml (tools/check.sh checks it): shown in the menu and
     //! sent to Home Assistant, whose watch card shows it
-    const APP_VERSION = "0.5.2";
+    const APP_VERSION = "0.6.1";
 
     function number(key as String, fallback as Number) as Number {
         var value = Application.Properties.getValue(key);

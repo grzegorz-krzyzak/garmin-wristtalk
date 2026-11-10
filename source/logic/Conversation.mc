@@ -11,7 +11,7 @@ enum State {
     STATE_LISTENING,
     STATE_RECOGNIZING,
     STATE_SENDING,
-    STATE_LOADING_VOICE,  // the reply text is on screen, its voice is on the way (2-4 s by phone)
+    STATE_LOADING_VOICE,  // the reply text is on screen, its voice is on the way (a stall too)
     STATE_PLAYING,
     STATE_ERROR
 }
@@ -21,7 +21,8 @@ enum PopupKind {
     POPUP_PAIRED,
     POPUP_VOICE,
     POPUP_TEXT_ONLY,
-    POPUP_NOT_HEARD
+    POPUP_NOT_HEARD,
+    POPUP_VOICE_FAILED  // the voice did not arrive, or was cut off - the text is there
 }
 
 enum EntryKind {
@@ -52,6 +53,7 @@ class Conversation {
     const PULSE_MS = 800;                // the START arc blinking while the app waits for START: on
                                          // 800 ms, off 800 ms (the breathing width was hard to see)
     const POPUP_MS = 1500;               // a confirmation; a problem stays until START or BACK
+    const VOICE_POPUP_MS = 2000;         // the voice failed: a note over the reply, then the reply
 
     var state as State = STATE_IDLE;
     var heard as String = "";
@@ -98,7 +100,7 @@ class Conversation {
     private var _speech as Boolean = false;
     private var _textOnly as Boolean = false;
     private var _fastTicks as Boolean = false;
-    private var _voice as ByteArray? = null;
+    private var _voice as Voice?;
     private var _pingResult as Result?;
     // Timers (watches limit how many may run): one for ticks and the popup, one for waits (pairing
     // shares it), one for closing on idle
@@ -218,6 +220,7 @@ class Conversation {
         idle.stop();
         _tickTimer.stop();
         _recorder.stop();
+        stopVoice();
         _player.stop();
     }
 
@@ -289,7 +292,7 @@ class Conversation {
         } else if (state == STATE_LISTENING) {
             finishListening();
         } else if (state == STATE_PLAYING || state == STATE_LOADING_VOICE) {
-            _player.stop();
+            stopVoice();
             listen();
         } else if (state == STATE_IDLE || (state == STATE_ERROR && canRetry)) {
             listen();
@@ -357,7 +360,7 @@ class Conversation {
         }
         Settings.setTextOnly(on);
         if (on && (state == STATE_PLAYING || state == STATE_LOADING_VOICE)) {
-            _player.stop();
+            stopVoice();
             done();
         }
         return true;
@@ -617,58 +620,63 @@ class Conversation {
         WatchUi.requestUpdate();
         if (result.flag("audio") && !Settings.textOnly()) {
             setState(STATE_LOADING_VOICE, SHOW_WAITING);
-            _client.audio(_session, method(:onAudio));
+            var voice = new Voice(_client, _player, _session, Settings.volume(), method(:onVoicePlaying),
+                method(:onVoiceWaiting), method(:onVoiceEnd), method(:voiceHoldLeft));
+            _voice = voice;
+            voice.start(System.getTimer());
+            runTicks();
         } else {
             done();
         }
     }
 
-    function onAudio(result as Result) as Void {
-        if (state != STATE_LOADING_VOICE) {
-            return;
-        }
-        if (result.kind == RESULT_UNAUTHORIZED) {
+    //! The voice plays (or plays on after a stall that showed)
+    function onVoicePlaying() as Void {
+        setState(STATE_PLAYING, SHOW_AFTER_HOLD);
+        WatchUi.requestUpdate();
+    }
+
+    //! A stall that lasted: "Loading voice" again; the reply stays on screen
+    function onVoiceWaiting() as Void {
+        setState(STATE_LOADING_VOICE, SHOW_NOW);
+        WatchUi.requestUpdate();
+    }
+
+    //! The voice starts, and plays on after a stall, with its screen: after the waiting look's minimum
+    function voiceHoldLeft(now as Number) as Number {
+        return shown.holdLeft(now);
+    }
+
+    //! A voice that failed is not a failed command: the reply is on screen - a short note and the
+    //! error vibration (the user may be listening, not looking), then as after any reply
+    function onVoiceEnd(end as VoiceEnd) as Void {
+        _voice = null;
+        if (end == VOICE_UNAUTHORIZED) {
             // The watch was removed meanwhile: pair now, or the next START would open the
             // microphone only to be refused
             reconnect();
             return;
         }
-        if (result.kind == RESULT_WAITING) {
-            _client.audio(_session, method(:onAudio));
-            return;
-        }
-        // Any other failure: the reply text is on screen already - only the voice is missing
-        if (!result.ok() || !(result.data instanceof ByteArray)) {
-            done();
-            return;
-        }
-        // The voice starts with its screen: after "Thinking" / "Loading voice" stayed their minimum
-        _voice = result.data as ByteArray;
-        var left = shown.holdLeft(System.getTimer());
-        if (left > 0) {
-            waitThen(left, method(:playVoice));
-        } else {
-            playVoice();
+        done();
+        if (end == VOICE_NOT_ARRIVED || end == VOICE_CUT_OFF) {
+            buzz(BUZZ_ERROR);
+            showPopup(POPUP_VOICE_FAILED, Settings.text(end == VOICE_NOT_ARRIVED
+                ? Rez.Strings.VoiceNotArrived : Rez.Strings.VoiceCutOff), VOICE_POPUP_MS);
         }
     }
 
-    function playVoice() as Void {
-        var voice = _voice;
-        _voice = null;
-        if (state != STATE_LOADING_VOICE || voice == null) {
-            return;
-        }
-        if (_player.play(voice, Settings.volume(), method(:onPlayed))) {
-            setState(STATE_PLAYING, SHOW_AFTER_HOLD);
-            WatchUi.requestUpdate();
-        } else {
-            done();
+    //! The voice's limits, a stall and its revival (from the ticks; `now` from the caller, so the
+    //! tests need not wait)
+    function checkVoice(now as Number) as Void {
+        if (_voice != null) {
+            (_voice as Voice).check(now);
         }
     }
 
-    function onPlayed() as Void {
-        if (state == STATE_PLAYING) {
-            done();
+    private function stopVoice() as Void {
+        if (_voice != null) {
+            (_voice as Voice).stop();
+            _voice = null;
         }
     }
 
@@ -676,6 +684,7 @@ class Conversation {
         abandonChunks();
         _waitTimer.stop();
         _recorder.stop();
+        stopVoice();
         _player.stop();
         stopTicks();
     }
@@ -896,9 +905,10 @@ class Conversation {
         }
     }
 
-    //! The fast ticks: an animation, a timed popup, or the screen catching up with the state
+    //! The fast ticks: an animation, a timed popup, the screen catching up with the state, or the
+    //! voice (its limits, a stall and its revival)
     private function fastTicksNeeded() as Boolean {
-        return _animating || (popup.length() > 0 && _popupUntil > 0) || !shown.settled();
+        return _animating || (popup.length() > 0 && _popupUntil > 0) || !shown.settled() || _voice != null;
     }
 
     private function startTicks() as Void {
@@ -930,6 +940,7 @@ class Conversation {
         tick++;
         stepPulse(now);
         checkChunks(now);
+        checkVoice(now);
         shown.update(now);
         if (popup.length() > 0 && _popupUntil > 0 && now >= _popupUntil) {
             popup = "";

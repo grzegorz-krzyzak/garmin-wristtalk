@@ -52,9 +52,13 @@ class FakeClient extends HaClient {
         pending.add(done);
     }
 
-    function audio(session as String, done as Method(result as Result) as Void) as Void {
-        calls.add("audio");
+    function audioPiece(session as String, offset as Number, done as Method(result as Result) as Void) as Void {
+        calls.add("audio:" + offset);
         pending.add(done);
+    }
+
+    function last() as String {
+        return calls[calls.size() - 1];
     }
 
     function answer(kind as ResultKind, code as Number, data as Dictionary or ByteArray or Null) as Void {
@@ -103,18 +107,64 @@ class FakeRecorder extends Recorder {
 (:test)
 class FakePlayer extends Player {
 
+    //! Bytes handed to the player (started with, then added)
     var played as Number = 0;
+    var started as Boolean = false;
+    var finished as Boolean = false;
+    //! Started with the whole voice (one source, not a stream)
+    var whole as Boolean = false;
+    var stopped as Boolean = false;
+    var pos as Number = 0;
+    var pauses as Number = 0;
+    var resumes as Number = 0;
+    var restarts as Number = 0;
+    private var _onDone as Method(ok as Boolean) as Void or Null;
 
     function initialize() {
         Player.initialize();
     }
 
-    function play(data as ByteArray, volume as Number, onDone as Method() as Void) as Boolean {
+    function start(data as ByteArray, volume as Number, whole as Boolean,
+            onDone as Method(ok as Boolean) as Void) as Boolean {
+        started = true;
+        self.whole = whole;
         played = data.size();
+        _onDone = onDone;
         return true;
     }
 
+    function add(data as ByteArray) as Void {
+        played += data.size();
+    }
+
+    function finish() as Void {
+        finished = true;
+    }
+
+    function position() as Number {
+        return pos;
+    }
+
+    function pause() as Void {
+        pauses++;
+    }
+
+    function resume() as Void {
+        resumes++;
+    }
+
+    function restart(data as ByteArray) as Void {
+        restarts++;
+        pos = 0;
+    }
+
     function stop() as Void {
+        stopped = true;
+    }
+
+    //! The player reports its end: played out (true) or failed
+    function end(ok as Boolean) as Void {
+        (_onDone as Method(ok as Boolean) as Void).invoke(ok);
     }
 }
 
@@ -283,11 +333,16 @@ function aCommandFromAudioToTheSpokenReply(logger as Test.Logger) as Boolean {
     Test.assertEqual(client.calls[client.calls.size() - 1], "reply");
     client.answer(RESULT_OK, 200, { "reply" => "Jest 21:37.", "audio" => true });
     Test.assertEqual(c.reply, "Jest 21:37.");
-    client.answer(RESULT_OK, 200, [9, 9, 9, 9]b);
-    Test.assertEqual(player.played, 4);
+    Test.assertEqual(client.last(), "audio:0");
+    // A short reply: the whole voice in one piece, played at once
+    var voice = VoiceTests.pages(0, [0, 0, 1000, 2000] as Array<Number>, true);
+    client.answer(RESULT_OK, 200, voice);
+    Test.assertEqual(player.played, voice.size());
+    Test.assert(player.whole);
     Test.assertEqual(c.state, STATE_PLAYING);
-    c.onPlayed();
+    player.end(true);
     Test.assertEqual(c.state, STATE_IDLE);
+    Test.assertEqual(c.popup, "");
     ConversationTests.tearDown(c);
     return true;
 }
@@ -320,7 +375,7 @@ function textOnlyAsksNoAudio(logger as Test.Logger) as Boolean {
     Test.assertEqual(client.lastChunk[2], true);
     client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "x" });
     client.answer(RESULT_OK, 200, { "reply" => "y", "audio" => true });
-    Test.assertEqual(client.calls.indexOf("audio"), -1);
+    Test.assertEqual(client.calls.indexOf("audio:0"), -1);
     Test.assertEqual(c.state, STATE_IDLE);
     ConversationTests.tearDown(c);
     return true;
@@ -926,9 +981,9 @@ function theVoiceIsAskedForAgainWhileItIsMade(logger as Test.Logger) as Boolean 
     client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
     client.answer(RESULT_OK, 200, { "reply" => "b", "audio" => true });
     client.answer(RESULT_WAITING, 202, null);
-    Test.assertEqual(client.calls[client.calls.size() - 1], "audio");
+    Test.assertEqual(client.last(), "audio:0");
     Test.assertEqual(c.state, STATE_LOADING_VOICE);
-    client.answer(RESULT_OK, 200, [9, 9]b);
+    client.answer(RESULT_OK, 200, VoiceTests.pages(0, [0, 0, 1000] as Array<Number>, true));
     Test.assertEqual(c.state, STATE_PLAYING);
     Test.assertEqual(HaClient.classify(202, null), RESULT_WAITING);
     ConversationTests.tearDown(c);
