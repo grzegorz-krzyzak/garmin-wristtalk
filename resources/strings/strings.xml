@@ -47,6 +47,7 @@
     <string id="ErrSttFailed">Speech recognition in Home Assistant is not working.</string>
     <string id="ErrConnection">Connection error ($1$).</string>
     <string id="StartToRetry">Press START to try again</string>
+    <string id="ReopenToRetry">Close WristTalk and open it again</string>
     <string id="NoReply">No reply</string>
     <string id="HelpTitle">Help</string>
     <string id="HouseUrlTitle">House address</string>

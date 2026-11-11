@@ -1289,3 +1289,71 @@ function recognizingFromHomeAssistantShowsNoLookAtFirst(logger as Test.Logger) a
     ConversationTests.tearDown(c);
     return true;
 }
+
+(:test)
+function recognisingWithNoAnswerIsAnErrorAfterFifteenSeconds(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
+    c.onSelect();
+    Test.assertEqual(c.state, STATE_RECOGNIZING);
+    // The answers never come back (not even an error)
+    var now = System.getTimer();
+    c.checkAnswers(now + 14000);
+    Test.assertEqual(c.state, STATE_RECOGNIZING);
+    c.checkAnswers(now + 15100);
+    Test.assertEqual(c.state, STATE_ERROR);
+    Test.assertEqual(c.error, Settings.text(Rez.Strings.ErrTimeout));
+    Test.assertEqual(c.errorHint, Settings.text(Rez.Strings.StartToRetry));
+    Test.assert(c.canRetry);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function thinkingWithNoAnswerIsAnErrorAndTheSecondSaysReopen(logger as Test.Logger) as Boolean {
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    Test.assertEqual(c.state, STATE_SENDING);
+    var now = System.getTimer();
+    // "waiting" is an answer: the clock starts again
+    c.checkAnswers(now + 10000);
+    client.answer(RESULT_OK, 200, { "state" => "waiting" });
+    now = System.getTimer();
+    c.checkAnswers(now + 14000);
+    Test.assertEqual(c.state, STATE_SENDING);
+    // The reply poll never answers
+    c.checkAnswers(now + 15100);
+    Test.assertEqual(c.state, STATE_ERROR);
+    Test.assertEqual(c.errorHint, Settings.text(Rez.Strings.StartToRetry));
+    // Again: the second in a row says to reopen the app
+    c.onSelect();
+    c.onAudioData([1]b);
+    client.pending = [client.pending[client.pending.size() - 1]];
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "b" });
+    c.checkAnswers(System.getTimer() + 15100);
+    Test.assertEqual(c.state, STATE_ERROR);
+    Test.assertEqual(c.errorHint, Settings.text(Rez.Strings.ReopenToRetry));
+    // A reply that comes: the count starts again
+    c.onSelect();
+    c.onAudioData([1]b);
+    client.pending = [client.pending[client.pending.size() - 1]];
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "c" });
+    client.answer(RESULT_OK, 200, { "reply" => "d", "audio" => false });
+    Test.assertEqual(c.state, STATE_IDLE);
+    c.onSelect();
+    c.onAudioData([1]b);
+    client.pending = [client.pending[client.pending.size() - 1]];
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "e" });
+    c.checkAnswers(System.getTimer() + 15100);
+    Test.assertEqual(c.errorHint, Settings.text(Rez.Strings.StartToRetry));
+    ConversationTests.tearDown(c);
+    return true;
+}

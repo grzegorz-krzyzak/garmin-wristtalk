@@ -53,6 +53,12 @@ class Conversation {
     const PULSE_MS = 800;                // the START arc blinking while the app waits for START: on
                                          // 800 ms, off 800 ms (the breathing width was hard to see)
     const POPUP_MS = 1500;               // a confirmation; a problem stays until START or BACK
+    const NO_ANSWER_MS = 15000;          // "Recognising" / "Thinking" with no answer from the house this
+                                         // long: an error, not a wait without end. Home Assistant answers
+                                         // every request within 4 s, the phone adds up to 3.5 s. Seen on
+                                         // the fēnix 8 (2026-11-12): requests reached the house, the
+                                         // answers never came back, the app stayed in "Recognising";
+                                         // reopening the app helped
     const VOICE_POPUP_MS = 2000;         // the voice failed: a note over the reply, then the reply
 
     var state as State = STATE_IDLE;
@@ -101,6 +107,8 @@ class Conversation {
     private var _textOnly as Boolean = false;
     private var _fastTicks as Boolean = false;
     private var _voice as Voice?;
+    private var _answeredAt as Number = 0;   // the house's last answer in this command
+    private var _noAnswers as Number = 0;    // NO_ANSWER_MS errors in a row
     private var _pingResult as Result?;
     // Timers (watches limit how many may run): one for ticks and the popup, one for waits (pairing
     // shares it), one for closing on idle
@@ -458,6 +466,7 @@ class Conversation {
         }
         _finalPending = true;
         _awaitingRest = true;
+        _answeredAt = System.getTimer();
         setState(STATE_RECOGNIZING, SHOW_NOW);
         WatchUi.requestUpdate();
         // The flags first: stopping may hand over the rest and report the end at once
@@ -539,6 +548,20 @@ class Conversation {
         }
     }
 
+    //! "Recognising" or "Thinking" with no answer from the house for NO_ANSWER_MS: a connection
+    //! error START may fix; the second in a row says to reopen the app (what helped on the watch).
+    //! From the ticks; `now` from the caller, so the tests need not wait
+    function checkAnswers(now as Number) as Void {
+        if ((state != STATE_RECOGNIZING && state != STATE_SENDING) || now - _answeredAt <= NO_ANSWER_MS) {
+            return;
+        }
+        _noAnswers++;
+        fail(Settings.text(Rez.Strings.ErrTimeout), true);
+        if (_noAnswers >= 2) {
+            errorHint = Settings.text(Rez.Strings.ReopenToRetry);
+        }
+    }
+
     private function abandonChunks() as Void {
         for (var i = 0; i < _inFlight.size(); i++) {
             _inFlight[i].abandoned = true;
@@ -557,6 +580,7 @@ class Conversation {
             }
             return;
         }
+        _answeredAt = System.getTimer();
         if (result.flag("speech")) {
             _speech = true;
         }
@@ -606,10 +630,12 @@ class Conversation {
             failRequest(result);
             return;
         }
+        _answeredAt = System.getTimer();
         if (result.text("state").equals("waiting")) {
             _client.reply(_session, method(:onReply));
             return;
         }
+        _noAnswers = 0;
         if (result.text("state").equals("nothing")) {
             notHeard();
             return;
@@ -940,6 +966,7 @@ class Conversation {
         tick++;
         stepPulse(now);
         checkChunks(now);
+        checkAnswers(now);
         checkVoice(now);
         var changed = shown.update(now);
         if (popup.length() > 0 && _popupUntil > 0 && now >= _popupUntil) {

@@ -47,6 +47,7 @@
     <string id="ErrSttFailed">Rozpoznawanie mowy w Home Assistant nie działa.</string>
     <string id="ErrConnection">Błąd połączenia ($1$).</string>
     <string id="StartToRetry">Naciśnij START, aby spróbować ponownie</string>
+    <string id="ReopenToRetry">Zamknij WristTalk i otwórz ponownie</string>
     <string id="NoReply">Bez odpowiedzi</string>
     <string id="HelpTitle">Pomoc</string>
     <string id="HouseUrlTitle">Adres domu</string>
