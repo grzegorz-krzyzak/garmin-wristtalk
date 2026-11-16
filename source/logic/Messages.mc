@@ -15,6 +15,7 @@ module Messages {
             case RESULT_UPDATE_INTEGRATION: return Settings.text(Rez.Strings.ErrUpdateIntegration);
             case RESULT_HTTPS: return Settings.text(Rez.Strings.ErrHttps);
             case RESULT_NO_ADDRESS: return Settings.text(Rez.Strings.PairNoAddress);
+            case RESULT_NOT_READY: return Settings.text(Rez.Strings.ErrNotReady);
             case RESULT_SERVER:
                 // The status: Connect IQ drops the body (and the integration's error code) of a 5xx
                 return Lang.format(Settings.text(Rez.Strings.ErrRejected), [result.code]);

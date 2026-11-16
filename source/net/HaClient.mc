@@ -15,7 +15,9 @@ enum ResultKind {
     RESULT_STT_FAILED,        // 424 - speech recognition failed a third time in a row
     RESULT_UPDATE_APP,        // 426: the app's protocol is too old
     RESULT_UPDATE_INTEGRATION, // 501: the integration's protocol is too old
-    RESULT_SERVER,            // 5xx, e.g. the pipeline failed
+    RESULT_NOT_READY,         // 503 - Home Assistant cannot take it now (reloading, starting, the
+                              // pipeline or ffmpeg failing): the key stays, START tries again
+    RESULT_SERVER,            // other 5xx
     RESULT_NO_PHONE,          // Bluetooth to the phone
     RESULT_TIMEOUT,
     RESULT_HTTPS,             // -1001: the address must be https://
@@ -55,9 +57,9 @@ class Result {
 //! screen or the conversation; every request ends in one callback with a Result.
 class HaClient {
 
-    // Raised with the integration on every change one side sends or expects (the table: the
-    // integration's design notes); 2: waits within 4 s, audio 202, a timed-out request repeated;
-    // 3: POST repair - "Pair again" from the menu; 6: the voice in pieces while it is made
+    // Raised with the integration on every change one side sends or expects: 2: waits within 4 s,
+    // audio 202, a timed-out request repeated; 3: POST repair - "Pair again" from the menu; 4: "final"
+    // at once; 5: "recognizing"; 6: the voice in pieces while it is made
     const PROTOCOL = "6";
     const API = "/api/wristtalk/v1/";
 
@@ -152,18 +154,18 @@ class HaClient {
             return;
         }
         // The key and the recording go only over HTTPS: the iPhone refuses http:// itself (-1001),
-        // Android may not - the watch does not rely on the phone (security review 2026-11-07)
+        // Android may not - the watch does not rely on the phone
         if (base.find("https://") != 0) {
             done.invoke(new Result(RESULT_HTTPS, Communications.SECURE_CONNECTION_REQUIRED, null));
             return;
         }
         // A handler object per request, not :context: without the phone Connect IQ calls the
-        // callback at once with only the code and the data (measured on the fēnix 8, 2026-11-04 -
-        // a three-argument callback crashed the app with "Not Enough Arguments")
+        // callback at once with only the code and the data (on the fēnix 8 a three-argument
+        // callback crashed the app with "Not Enough Arguments")
         new PendingRequest(base + API + path, params, options, done, repeatable ? 1 : 0).send();
     }
 
-    //! By the status alone: Connect IQ may drop the body of a status other than 200 (measured in the
+    //! By the status alone: Connect IQ may drop the body of a status other than 200 (seen in the
     //! simulator for the chunk requests, binary body), so every case to tell apart has its own status
     static function classify(code as Number, body as Dictionary or ByteArray or Null) as ResultKind {
         if (code == 200) {
@@ -181,6 +183,7 @@ class HaClient {
             case 424: return RESULT_STT_FAILED;
             case 426: return RESULT_UPDATE_APP;
             case 501: return RESULT_UPDATE_INTEGRATION;
+            case 503: return RESULT_NOT_READY;
             case Communications.SECURE_CONNECTION_REQUIRED: return RESULT_HTTPS;
             case Communications.NETWORK_REQUEST_TIMED_OUT: return RESULT_TIMEOUT;
             case Communications.BLE_CONNECTION_UNAVAILABLE:
@@ -194,8 +197,8 @@ class HaClient {
 }
 
 //! One request and its answer: the callback Connect IQ calls with the code and the data. A timeout
-//! is sent again while retries are left - through the phone one failed with -300 after 0.9 s
-//! (measured on the fēnix 8, 2026-11-04) and the next request went through
+//! is sent again while retries are left - through the phone one failed with -300 after 0.9 s on
+//! the fēnix 8 and the next request went through
 class PendingRequest {
 
     private var _url as String;
@@ -215,7 +218,7 @@ class PendingRequest {
 
     //! A handler object per request, not :context: without the phone Connect IQ calls the callback
     //! at once with only the code and the data (a three-argument callback crashed the app with "Not
-    //! Enough Arguments", fēnix 8, 2026-11-04)
+    //! Enough Arguments" on the fēnix 8)
     function send() as Void {
         Communications.makeWebRequest(_url, _params, _options as {
             :method as Communications.HttpRequestMethod, :headers as Dictionary,

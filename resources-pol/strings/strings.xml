@@ -11,9 +11,6 @@
     <string id="VolumeQuiet">Cicho</string>
     <string id="VolumeMedium">Średnio</string>
     <string id="VolumeLoud">Głośno</string>
-    <string id="TextSizeTitle">Wielkość tekstu</string>
-    <string id="TextSmall">Mała</string>
-    <string id="TextLarge">Duża</string>
     <string id="VibrationTitle">Wibracje</string>
     <string id="VibrationFull">Pełne</string>
     <string id="VibrationMinimal">Minimalne (odpowiedź, błąd)</string>
@@ -40,10 +37,12 @@
     <string id="NotHeardHint">Naciśnij START, aby powiedzieć jeszcze raz</string>
     <string id="VoiceNotArrived">Głos nie dotarł</string>
     <string id="VoiceCutOff">Głos się urwał</string>
+    <string id="CommandSent">Komenda już wysłana</string>
     <string id="ErrNoPhone">Brak połączenia z telefonem.</string>
     <string id="ErrTimeout">Dom nie odpowiada - spróbuj za chwilę.</string>
     <string id="ErrTooLong">Komenda za długa - powiedz krócej.</string>
     <string id="ErrRejected">Dom nie przyjął komendy ($1$).</string>
+    <string id="ErrNotReady">Home Assistant nie może teraz przyjąć komendy - spróbuj za chwilę.</string>
     <string id="ErrSttFailed">Rozpoznawanie mowy w Home Assistant nie działa.</string>
     <string id="ErrConnection">Błąd połączenia ($1$).</string>
     <string id="StartToRetry">Naciśnij START, aby spróbować ponownie</string>
@@ -61,6 +60,7 @@
     <string id="PairOpenInHa">Dodaj zegarek w Home Assistant</string>
     <string id="PairOpenInHaHint">WristTalk</string>
     <string id="PairAddWatchButton">+ Dodaj zegarek</string>
+    <string id="PairGaveUp">Parowanie przerwane - naciśnij START, aby spróbować ponownie</string>
     <string id="PairNoAddress">Wpisz adres domu w ustawieniach WristTalk w aplikacji Connect IQ</string>
     <string id="PairDone">Sparowano</string>
     <string id="ErrTooMany">Za dużo komend - chwila przerwy.</string>

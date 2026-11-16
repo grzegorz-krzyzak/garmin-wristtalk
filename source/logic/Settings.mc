@@ -8,9 +8,9 @@ import Toybox.WatchUi;
 //! kept on the watch (the key, the address it belongs to).
 module Settings {
 
-    //! The same as the version in manifest.xml (tools/check.sh checks it): shown in the menu and
+    //! The same as the version in manifest.xml (tools/build.sh release checks it): shown in the menu and
     //! sent to Home Assistant, whose watch card shows it
-    const APP_VERSION = "0.6.3";
+    const APP_VERSION = "1.6.0";
 
     function number(key as String, fallback as Number) as Number {
         var value = Application.Properties.getValue(key);
@@ -56,10 +56,6 @@ module Settings {
     function volume() as Number {
         var level = number("volume", 1);
         return level == 0 ? 30 : (level == 2 ? 95 : 60);
-    }
-
-    function largeText() as Boolean {
-        return number("textSize", 0) == 1;
     }
 
     function idleExitMs() as Number {

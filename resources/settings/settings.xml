@@ -24,12 +24,6 @@
             <listEntry value="2">@Strings.VolumeLoud</listEntry>
         </settingConfig>
     </setting>
-    <setting propertyKey="@Properties.textSize" title="@Strings.TextSizeTitle" helpUrl="https://grzegorz-krzyzak.github.io/wristtalk/help/">
-        <settingConfig type="list">
-            <listEntry value="0">@Strings.TextSmall</listEntry>
-            <listEntry value="1">@Strings.TextLarge</listEntry>
-        </settingConfig>
-    </setting>
     <setting propertyKey="@Properties.vibration" title="@Strings.VibrationTitle" helpUrl="https://grzegorz-krzyzak.github.io/wristtalk/help/">
         <settingConfig type="list">
             <listEntry value="2">@Strings.VibrationOff</listEntry>

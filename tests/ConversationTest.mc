@@ -241,9 +241,9 @@ function pairingShowsTheCodeAndStoresTheKey(logger as Test.Logger) as Boolean {
     client.answer(RESULT_OK, 200, { "state" => "pending" });
     Test.assertEqual(c.state, STATE_PAIRING);
     c.pairing.poll();
-    client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret" });
+    client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret-key-from-home-assistant" });
     Test.assertEqual(c.state, STATE_IDLE);
-    Test.assertEqual(Settings.key(), "secret");
+    Test.assertEqual(Settings.key(), "secret-key-from-home-assistant");
     // The proof for Home Assistant: the first request signed with the new key
     Test.assertEqual(client.calls[client.calls.size() - 1], "ping");
     Test.assert(Settings.pairingInProgress() == null);
@@ -267,7 +267,7 @@ function aLostConnectionKeepsThePairingCode(logger as Test.Logger) as Boolean {
     // The owner confirmed meanwhile: the next poll still gets the key
     c.pairing.poll();
     Test.assertEqual(client.calls[client.calls.size() - 1], "poll:p1");
-    client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret" });
+    client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret-key-from-home-assistant" });
     Test.assertEqual(c.state, STATE_IDLE);
     ConversationTests.tearDown(c);
     // An expired pairing starts over
@@ -519,8 +519,8 @@ function aKeptPairingCollectsTheKeyAfterTheAppOpensAgain(logger as Test.Logger) 
     c2.onKeyReread();
     Test.assertEqual(client2.calls[0], "poll:p1");
     Test.assertEqual(c2.pairing.code, "482913");
-    client2.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret" });
-    Test.assertEqual(Settings.key(), "secret");
+    client2.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret-key-from-home-assistant" });
+    Test.assertEqual(Settings.key(), "secret-key-from-home-assistant");
     Test.assertEqual(client2.calls[client2.calls.size() - 1], "ping");
     ConversationTests.tearDown(c2);
     return true;
@@ -671,7 +671,7 @@ function pairingAgainClearsTheConversation(logger as Test.Logger) as Boolean {
     client.answer(RESULT_UNAUTHORIZED, 401, null);
     client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
     c.pairing.poll();
-    client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "k2" });
+    client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "second-key-from-home-assistant" });
     Test.assert(c.isEmpty());
     ConversationTests.tearDown(c);
     return true;
@@ -825,7 +825,8 @@ function protocolErrorsAreClassified(logger as Test.Logger) as Boolean {
     Test.assertEqual(HaClient.classify(426, null), RESULT_UPDATE_APP);
     Test.assertEqual(HaClient.classify(501, null), RESULT_UPDATE_INTEGRATION);
     Test.assertEqual(HaClient.classify(424, null), RESULT_STT_FAILED);
-    Test.assertEqual(HaClient.classify(503, null), RESULT_SERVER);
+    Test.assertEqual(HaClient.classify(503, null), RESULT_NOT_READY);
+    Test.assertEqual(HaClient.classify(500, null), RESULT_SERVER);
     Test.assertEqual(HaClient.classify(-1001, null), RESULT_HTTPS);
     Test.assertEqual(HaClient.classify(-104, null), RESULT_NO_PHONE);
     return true;
@@ -1354,6 +1355,262 @@ function thinkingWithNoAnswerIsAnErrorAndTheSecondSaysReopen(logger as Test.Logg
     client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "e" });
     c.checkAnswers(System.getTimer() + 15100);
     Test.assertEqual(c.errorHint, Settings.text(Rez.Strings.StartToRetry));
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aLateReplyOfAGivenUpCommandIsIgnored(logger as Test.Logger) as Boolean {
+    // BACK in "Thinking", START, a new command - the old reply poll answers late
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "old" });
+    Test.assertEqual(c.state, STATE_SENDING);
+    Test.assertEqual(client.last(), "reply");
+    var oldReply = client.pending[client.pending.size() - 1];
+    c.onBack();
+    c.onSelect();
+    c.onAudioData([1]b);
+    Test.assertEqual(c.state, STATE_LISTENING);
+    // The new command is heard and waits for its own reply ("Thinking")
+    client.pending = [client.pending[client.pending.size() - 1]];
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "new" });
+    Test.assertEqual(c.state, STATE_SENDING);
+    // Now the old command's answer comes - neither its text nor its error reaches the new command
+    oldReply.invoke(new Result(RESULT_OK, 200, { "reply" => "old reply", "audio" => false }));
+    Test.assertEqual(c.state, STATE_SENDING);
+    Test.assertEqual(c.reply, "");
+    oldReply.invoke(new Result(RESULT_SERVER, 500, null));
+    Test.assertEqual(c.state, STATE_SENDING);
+    Test.assertEqual(c.error, "");
+    // The new command's own reply still arrives
+    client.answer(RESULT_OK, 200, { "reply" => "new reply", "audio" => false });
+    Test.assertEqual(c.reply, "new reply");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aLatePingOfTheOldKeyDoesNotUnpairTheNewOne(logger as Test.Logger) as Boolean {
+    // the ping: a 401 of the ping sent with the old key must not delete the key paired since
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    Application.Properties.setValue("listenOnOpen", false);
+    c.startOnce();
+    Test.assertEqual(client.last(), "ping");
+    var oldPing = client.pending[client.pending.size() - 1];
+    // "Pair again" meanwhile, and the new key in
+    c.pairAgain();
+    Settings.setKey("k2");
+    oldPing.invoke(new Result(RESULT_UNAUTHORIZED, 401, null));
+    Test.assertEqual(Settings.key(), "k2");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function backAfterTheCommandWasSentSaysItRunsAnyway(logger as Test.Logger) as Boolean {
+    // BACK in "Thinking" stops the wait, not the command - it must not look like a cancel
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "open the gate" });
+    Test.assertEqual(c.state, STATE_SENDING);
+    Test.assert(c.onBack());
+    Test.assertEqual(c.state, STATE_IDLE);
+    Test.assertEqual(c.popup, Settings.text(Rez.Strings.CommandSent));
+    // BACK while still listening, nothing sent as the end: a plain stop
+    c.onBack();
+    c.onSelect();
+    Test.assertEqual(c.state, STATE_LISTENING);
+    Test.assert(c.onBack());
+    Test.assertEqual(c.popup, "");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function busyHomeAssistantKeepsTheKey(logger as Test.Logger) as Boolean {
+    // 503 (a reload, a restart, the pipeline failing): a message, START tries again, the key stays
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_NOT_READY, 503, null);
+    Test.assertEqual(c.state, STATE_ERROR);
+    Test.assertEqual(c.error, Settings.text(Rez.Strings.ErrNotReady));
+    Test.assert(c.canRetry);
+    Test.assert(Settings.key() != null);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function listeningEndsAtItsCapWhileSpeechGoesOn(logger as Test.Logger) as Boolean {
+    // the first audio re-armed the wait timer for "nothing said" - the 25 s cap was gone
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
+    var now = System.getTimer();
+    c.checkListening(now + 24000);
+    Test.assertEqual(c.state, STATE_LISTENING);
+    c.checkListening(now + 25100);
+    Test.assertEqual(c.state, STATE_RECOGNIZING);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function answersOnTheWayDoNotMoveTheReplyDeadline(logger as Test.Logger) as Boolean {
+    // "waiting" again and again reset the no-answer clock - "Thinking" could last forever
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "heard", "heard" => "a" });
+    var start = System.getTimer();
+    for (var i = 0; i < 5; i++) {
+        client.answer(RESULT_OK, 200, { "state" => "waiting" });
+    }
+    Test.assertEqual(c.state, STATE_SENDING);
+    // The last "waiting" a second ago - not the no-answer case; only the deadline can end it
+    c.setAnsweredAt(start + 58000);
+    c.checkAnswers(start + 59000);
+    Test.assertEqual(c.state, STATE_SENDING);
+    c.setAnsweredAt(start + 59500);
+    c.checkAnswers(start + 60100);
+    Test.assertEqual(c.state, STATE_ERROR);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function anEmptyFinalIsAskedAgainAFewTimesOnly(logger as Test.Logger) as Boolean {
+    // "listening" to the final sent another empty final at once, without end
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    ConversationTests.open(c, client);
+    c.onAudioData([1]b);
+    client.answer(RESULT_OK, 200, { "state" => "listening" });
+    c.finishListening();
+    c.sendFinal();
+    for (var i = 0; i < 10; i++) {
+        Test.assertEqual(client.lastChunk[3], true);
+        client.answer(RESULT_OK, 200, { "state" => "listening" });
+        Test.assertEqual(c.state, STATE_RECOGNIZING);
+        c.sendFinalAgain();
+    }
+    client.answer(RESULT_OK, 200, { "state" => "listening" });
+    Test.assertEqual(c.state, STATE_ERROR);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function pairingSendsOneRequestAtATime(logger as Test.Logger) as Boolean {
+    // every START, resume and settings change sent another pair with one on its way
+    var t = ConversationTests.setUp(false);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    c.onKeyReread();
+    Test.assertEqual(client.last(), "pair");
+    var calls = client.calls.size();
+    c.onSelect();
+    c.onSettingsChanged();
+    Test.assertEqual(client.calls.size(), calls);
+    // In the background and back: the old request is given up, its late answer ignored
+    c.onBackground();
+    c.onForeground();
+    Test.assertEqual(client.calls.size(), calls + 1);
+    var stale = client.pending[0];
+    client.pending = client.pending.slice(1, null);
+    stale.invoke(new Result(RESULT_OK, 200, { "pair_id" => "old", "code" => "111111" }));
+    Test.assertEqual(c.pairing.code, "");
+    client.answer(RESULT_OK, 200, { "pair_id" => "p2", "code" => "222222" });
+    Test.assertEqual(c.pairing.code, "222222");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function anEmptyKeyIsNotTakenAndTheConfirmationIsResent(logger as Test.Logger) as Boolean {
+    // an empty key was stored; a lost confirming ping left Home Assistant without the watch
+    var t = ConversationTests.setUp(false);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    c.onKeyReread();
+    client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
+    c.pairing.poll();
+    client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "" });
+    Test.assert(Settings.key() == null);
+    Test.assertEqual(client.last(), "pair");
+    client.answer(RESULT_OK, 200, { "pair_id" => "p2", "code" => "123456" });
+    c.pairing.poll();
+    client.answer(RESULT_OK, 200, { "state" => "paired", "key" => "secret-key-from-home-assistant" });
+    Test.assertEqual(client.last(), "ping");
+    client.answer(RESULT_TIMEOUT, -2, null);
+    Test.assertEqual(client.last(), "ping");
+    client.answer(RESULT_TIMEOUT, -2, null);
+    var calls = client.calls.size();
+    client.answer(RESULT_TIMEOUT, -2, null);
+    Test.assertEqual(client.calls.size(), calls);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function pairingStopsOnPermanentErrorsAndAfterItsCap(logger as Test.Logger) as Boolean {
+    // an https error kept polling every few seconds; nothing ended the pairing screen
+    var t = ConversationTests.setUp(false);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    c.onKeyReread();
+    client.answer(RESULT_HTTPS, -1001, null);
+    Test.assertEqual(c.pairing.notice, Settings.text(Rez.Strings.ErrHttps));
+    // START asks again; then, past the cap, the pairing stops with a note
+    c.onSelect();
+    Test.assertEqual(client.last(), "pair");
+    client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
+    c.pairing.setSince(System.getTimer() - 600100);
+    var calls = client.calls.size();
+    c.pairing.poll();
+    Test.assertEqual(client.calls.size(), calls);
+    Test.assertEqual(c.pairing.notice, Settings.text(Rez.Strings.PairGaveUp));
+    Test.assertEqual(c.pairing.code, "");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aNewAddressWhileACodeShowsStartsANewPairing(logger as Test.Logger) as Boolean {
+    // after an address change the old pairing (for the old house) was polled
+    var t = ConversationTests.setUp(false);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    c.startOnce();
+    c.onKeyReread();
+    client.answer(RESULT_OK, 200, { "pair_id" => "p1", "code" => "482913" });
+    Test.assert(Settings.pairingInProgress() != null);
+    Application.Properties.setValue("houseUrl", "https://other.example.org");
+    c.onSettingsChanged();
+    Test.assertEqual(client.last(), "pair");
+    Test.assertEqual(c.pairing.code, "");
+    Test.assert(Settings.pairingInProgress() == null);
     ConversationTests.tearDown(c);
     return true;
 }

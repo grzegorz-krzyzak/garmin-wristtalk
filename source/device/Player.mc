@@ -3,27 +3,27 @@ import Toybox.Lang;
 import Toybox.System;
 
 //! The speaker: plays the reply's voice (Ogg/Opus 16 kHz mono) while it is still coming - a
-//! streaming source takes the bytes as it has room. Measured on the fēnix 8 (2026-11-10): an Ogg
+//! streaming source takes the bytes as it has room. On the fēnix 8: an Ogg
 //! cut anywhere plays; a source that runs dry stops for good without telling (no error, no state) -
 //! `pause()` and `resume()` start it again from where it stopped; a new stream from a page works
 //! too and repeats that page. Which to do and when the voice logic decides; this only plays.
 class Player {
 
     const BUFFER = 8192;   // as tested on the watch
-    // A stopped stream's "stopped" comes late - after the next one started (seen on the fēnix 8)
-    const LATE_STOP_MS = 1500;
+    // A stopped stream's "stopped" comes late - after the next one started (seen on the fēnix 8):
+    // it is counted when the stream is replaced and that many "stopped" are taken for it
 
     private var _onDone as Method(ok as Boolean) as Void or Null;
     private var _source as VoiceSource?;
     private var _playing as Boolean = false;
-    private var _restartedAt as Number = -LATE_STOP_MS;
+    private var _replacedStops as Number = 0;
 
     function initialize() {
     }
 
     //! Starts playing `data`; false when it cannot (the reply text stays). `whole`: that is all of
-    //! it - played as one source, as 0.5.x did (a stream ended before it started playing stayed
-    //! silent on the fēnix 8, 2026-11-10: a short reply fits the buffer whole); otherwise more comes
+    //! it - played as one source (a stream ended before it started playing stays silent on the
+    //! fēnix 8: a short reply fits the buffer whole); otherwise more comes
     //! with add, and finish() ends it. onDone(true): played to the end; onDone(false): the player failed
     function start(data as ByteArray, volume as Number, whole as Boolean,
             onDone as Method(ok as Boolean) as Void) as Boolean {
@@ -32,6 +32,7 @@ class Player {
         }
         try {
             _onDone = onDone;
+            _replacedStops = 0;
             Audio.Output.registerStateChangeHandler(method(:onState));
             Audio.Output.setVolume(volume);
             if (whole) {
@@ -84,12 +85,13 @@ class Player {
             return;
         }
         var finished = _source != null && (_source as VoiceSource).finishing;
-        _restartedAt = System.getTimer();
+        _replacedStops++;
         Audio.Output.stop();
         play(data, finished);
     }
 
     function stop() as Void {
+        release();
         _source = null;
         if (_playing) {
             _playing = false;
@@ -123,8 +125,9 @@ class Player {
     }
 
     function onState(state as Audio.Output.PlaybackState) as Void {
-        if (state == Audio.Output.PLAYBACK_STOPPED && System.getTimer() - _restartedAt < LATE_STOP_MS) {
-            return;  // the replaced stream's own end
+        if (state == Audio.Output.PLAYBACK_STOPPED && _replacedStops > 0) {
+            _replacedStops--;
+            return;  // the replaced stream's own end (if it never comes, the voice's watchdog ends it)
         }
         if (state == Audio.Output.PLAYBACK_STOPPED || state == Audio.Output.PLAYBACK_ERROR) {
             end(state == Audio.Output.PLAYBACK_STOPPED);
@@ -137,9 +140,18 @@ class Player {
         }
         _playing = false;
         _source = null;
-        if (_onDone != null) {
-            (_onDone as Method(ok as Boolean) as Void).invoke(ok);
+        var onDone = _onDone;
+        release();
+        if (onDone != null) {
+            (onDone as Method(ok as Boolean) as Void).invoke(ok);
         }
+    }
+
+    //! A finished voice is not kept reachable: the callback (its Voice and pages) and the state
+    //! handler go
+    private function release() as Void {
+        _onDone = null;
+        Audio.Output.registerStateChangeHandler(null);
     }
 }
 
@@ -155,8 +167,10 @@ class VoiceSource extends Audio.Output.StreamingAudioSource {
 
     var finishing as Boolean = false;
 
-    private var _waiting as ByteArray = []b;
-    private var _taken as Number = 0;          // of _waiting, handed to the player already
+    // The pieces not yet taken by the player, as they came (the voice's own pieces: no copy)
+    private var _waiting as Array<ByteArray> = [] as Array<ByteArray>;
+    private var _index as Number = 0;          // the piece being handed over
+    private var _taken as Number = 0;          // of that piece, handed to the player already
     private var _ended as Boolean = false;
     private var _onError as Method() as Void;
 
@@ -166,11 +180,11 @@ class VoiceSource extends Audio.Output.StreamingAudioSource {
     }
 
     function add(data as ByteArray) as Void {
-        if (_taken > 0) {
-            _waiting = _waiting.slice(_taken, null);
-            _taken = 0;
+        if (_index > 0) {
+            _waiting = _waiting.slice(_index, null);
+            _index = 0;
         }
-        _waiting.addAll(data);
+        _waiting.add(data);
         hand(getBufferSize());
     }
 
@@ -190,12 +204,24 @@ class VoiceSource extends Audio.Output.StreamingAudioSource {
     //! As much as the player takes - only that much is copied, not the rest each time (a large
     //! piece is handed over in many calls while it plays); the end once everything is taken
     private function hand(room as Number) as Void {
-        var left = _waiting.size() - _taken;
-        if (left > 0 && room > 0) {
-            var count = left < room ? left : room;
-            _taken += append(_waiting.slice(_taken, _taken + count));
+        while (room > 0 && _index < _waiting.size()) {
+            var piece = _waiting[_index];
+            var left = piece.size() - _taken;
+            if (left > 0) {
+                var count = left < room ? left : room;
+                var given = append(_taken == 0 && count == piece.size() ? piece : piece.slice(_taken, _taken + count));
+                _taken += given;
+                room -= given;
+                if (given < count) {
+                    break;  // the player took less: the rest when it asks again
+                }
+            }
+            if (_taken >= piece.size()) {
+                _index++;
+                _taken = 0;
+            }
         }
-        if (finishing && _taken >= _waiting.size() && !_ended) {
+        if (finishing && _index >= _waiting.size() && !_ended) {
             _ended = true;
             end();
         }

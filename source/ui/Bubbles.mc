@@ -26,7 +26,7 @@ module Bubbles {
     const DOTS_HEIGHT = 24;
 
     // Wrapped lines by font and text: wrapping every bubble on every frame was too slow to follow a
-    // finger dragging the conversation on the fēnix 8 (2026-11-04)
+    // finger dragging the conversation on the fēnix 8
     var _wrapped as Dictionary<String, Array<String>> = {} as Dictionary<String, Array<String>>;
 
     //! [kind, lines, right, fill, textColor]

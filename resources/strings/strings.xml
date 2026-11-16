@@ -11,9 +11,6 @@
     <string id="VolumeQuiet">Quiet</string>
     <string id="VolumeMedium">Medium</string>
     <string id="VolumeLoud">Loud</string>
-    <string id="TextSizeTitle">Text size</string>
-    <string id="TextSmall">Small</string>
-    <string id="TextLarge">Large</string>
     <string id="VibrationTitle">Vibration</string>
     <string id="VibrationFull">Full</string>
     <string id="VibrationMinimal">Minimal (reply, error)</string>
@@ -40,10 +37,12 @@
     <string id="NotHeardHint">Press START to say it again</string>
     <string id="VoiceNotArrived">Voice did not arrive</string>
     <string id="VoiceCutOff">Voice cut off</string>
+    <string id="CommandSent">Command already sent</string>
     <string id="ErrNoPhone">No connection to the phone.</string>
     <string id="ErrTimeout">The house is not answering - try again shortly.</string>
     <string id="ErrTooLong">The command is too long - say it shorter.</string>
     <string id="ErrRejected">The house rejected the command ($1$).</string>
+    <string id="ErrNotReady">Home Assistant cannot take the command right now - try again shortly.</string>
     <string id="ErrSttFailed">Speech recognition in Home Assistant is not working.</string>
     <string id="ErrConnection">Connection error ($1$).</string>
     <string id="StartToRetry">Press START to try again</string>
@@ -61,6 +60,7 @@
     <string id="PairOpenInHa">Add the watch in Home Assistant</string>
     <string id="PairOpenInHaHint">WristTalk</string>
     <string id="PairAddWatchButton">+ Add watch</string>
+    <string id="PairGaveUp">Pairing stopped - press START to try again</string>
     <string id="PairNoAddress">Set the house address in the WristTalk settings in the Connect IQ app</string>
     <string id="PairDone">Paired</string>
     <string id="ErrTooMany">Too many commands - wait a moment.</string>

@@ -24,7 +24,7 @@ class Recorder {
                     :channels => Audio.CHANNEL_MONO
                 },
                 // The audio comes about once a second on the fēnix 8 whatever the window; 512 bytes only
-                // doubled the requests, and the phone lost some (measured 2026-11-05)
+                // doubled the requests, and the phone lost some
                 :windowSize => 1024,
                 :windowFilledBehavior => Audio.Capture.WINDOW_FILLED_CONTINUE
             };

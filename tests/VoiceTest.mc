@@ -31,6 +31,22 @@ module VoiceTests {
         return page;
     }
 
+    //! A page of about 64 kB (255 segments of 255 bytes): the fifth passes the watch's cap of 256 kB
+    function bigPage(sequence as Number, endMs as Number) as ByteArray {
+        var page = new [27 + 255 + 255 * 255]b;
+        page[0] = 0x4f;
+        page[1] = 0x67;
+        page[2] = 0x67;
+        page[3] = 0x53;
+        page.encodeNumber(endMs * 48, Lang.NUMBER_FORMAT_SINT32, { :offset => 6, :endianness => Lang.ENDIAN_LITTLE });
+        page.encodeNumber(sequence, Lang.NUMBER_FORMAT_SINT32, { :offset => 18, :endianness => Lang.ENDIAN_LITTLE });
+        page[26] = 255;
+        for (var i = 0; i < 255; i++) {
+            page[27 + i] = 255;
+        }
+        return page;
+    }
+
     //! A command up to its reply with a voice: the voice's first request on its way
     function toVoice(c as Conversation, client as FakeClient) as Void {
         ConversationTests.open(c, client);
@@ -403,5 +419,58 @@ function oggPagesCountTheSpeechAndFindAPage(logger as Test.Logger) as Boolean {
     Test.assertEqual(pages.startMs(1500), 1000);
     Test.assertEqual(pages.startMs(0), 0);
     Test.assert(pages.fromPosition(5000) == null);
+    return true;
+}
+
+(:test)
+function aVoicePastTheCapIsCutThere(logger as Test.Logger) as Boolean {
+    // the whole reply was kept with no limit on the watch
+    var pages = new OggPages();
+    Test.assert(pages.add(VoiceTests.pages(0, [0, 0] as Array<Number>, false)));
+    Test.assert(pages.add(VoiceTests.bigPage(2, 10000)));
+    Test.assert(pages.add(VoiceTests.bigPage(3, 20000)));
+    Test.assert(pages.add(VoiceTests.bigPage(4, 30000)));
+    Test.assert(pages.add(VoiceTests.bigPage(5, 40000)));
+    Test.assert(!pages.full);
+    var before = pages.size;
+    Test.assert(!pages.add(VoiceTests.bigPage(6, 50000)));
+    Test.assert(pages.full);
+    Test.assertEqual(pages.size, before);
+    // In a voice: nothing more is asked once the cap is reached
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    VoiceTests.toPlaying(c, client);
+    var asked = client.calls.size();
+    client.answer(RESULT_OK, 200, VoiceTests.bigPage(5, 13000));
+    client.answer(RESULT_OK, 200, VoiceTests.bigPage(6, 23000));
+    client.answer(RESULT_OK, 200, VoiceTests.bigPage(7, 33000));
+    client.answer(RESULT_OK, 200, VoiceTests.bigPage(8, 43000));
+    client.answer(RESULT_OK, 200, VoiceTests.bigPage(9, 53000));
+    Test.assertEqual(client.pending.size(), 0);
+    Test.assertEqual(client.calls.size(), asked + 4);
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aVoiceThatStopsMovingAfterItsEndIsDone(logger as Test.Logger) as Boolean {
+    // once all of it was in, a missed "stopped" left the app in "Replying" for good
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    var player = t[3] as FakePlayer;
+    var size = VoiceTests.toPlaying(c, client);
+    client.answer(RESULT_OK, 200, VoiceTests.pages(5, [4000] as Array<Number>, true));
+    Test.assert(size > 0);
+    var now = System.getTimer();
+    player.pos = 3900;
+    c.checkVoice(now);
+    c.checkVoice(now + 2000);
+    Test.assertEqual(c.state, STATE_PLAYING);
+    c.checkVoice(now + 3100);
+    Test.assert(c.state != STATE_PLAYING);
+    Test.assert(player.stopped);
+    ConversationTests.tearDown(c);
     return true;
 }

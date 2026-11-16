@@ -22,7 +22,8 @@ enum PopupKind {
     POPUP_VOICE,
     POPUP_TEXT_ONLY,
     POPUP_NOT_HEARD,
-    POPUP_VOICE_FAILED  // the voice did not arrive, or was cut off - the text is there
+    POPUP_VOICE_FAILED, // the voice did not arrive, or was cut off - the text is there
+    POPUP_COMMAND_SENT  // BACK after the command reached Home Assistant: it runs anyway
 }
 
 enum EntryKind {
@@ -39,12 +40,19 @@ class Conversation {
                                          // than ShownState.SHOW_MS: "Connecting…" must not show meanwhile)
     const CONNECTING_CAP_MS = 10500;     // no answer: a connection error
     const NO_SPEECH_MS = 12000;          // from the first audio: nothing said -> "nothing heard"; 5 s was
-                                         // too short through the phone (speech seen in HA at 5-7 s, 2026-11-05)
+                                         // too short through the phone (speech reached HA after 5-7 s)
     const LISTEN_CAP_MS = 25000;         // the integration closes at 20 s; this only guards the watch
+    // From the end of listening to the reply text at most this long, whatever the house answers on
+    // the way ("listening", "waiting" reset NO_ANSWER_MS, not this)
+    const ANSWER_CAP_MS = 60000;
+    // "listening" to the empty "final" (the text not there yet): asked again after a moment, at most
+    // this many times
+    const FINAL_AGAIN_MS = 300;
+    const FINALS_AGAIN = 10;
     const REST_WAIT_MS = 1500;           // after START: the microphone's last audio, then "final"
     const CHUNK_TRIES = 3;               // a chunk lost on the way is sent again; after 3 tries an error
     const CHUNK_ANSWER_MS = 10000;       // no answer by then: counted as lost (the phone path can keep
-                                         // a request without an answer, 2026-11-05)
+                                         // a request without an answer)
     const CHUNKS_IN_FLIGHT = 2;          // through the phone one chunk takes 1.5-3.5 s: the next one
                                          // goes meanwhile (the integration takes them in any order)
     const CONVERSATION_TIMEOUT_MS = 300000;  // Home Assistant's chat session: 5 minutes
@@ -56,9 +64,9 @@ class Conversation {
     const NO_ANSWER_MS = 15000;          // "Recognising" / "Thinking" with no answer from the house this
                                          // long: an error, not a wait without end. Home Assistant answers
                                          // every request within 4 s, the phone adds up to 3.5 s. Seen on
-                                         // the fēnix 8 (2026-11-12): requests reached the house, the
-                                         // answers never came back, the app stayed in "Recognising";
-                                         // reopening the app helped
+                                         // the fēnix 8: requests reached the house, the answers never
+                                         // came back, the app stayed in "Recognising"; reopening the
+                                         // app helped
     const VOICE_POPUP_MS = 2000;         // the voice failed: a note over the reply, then the reply
 
     var state as State = STATE_IDLE;
@@ -107,7 +115,15 @@ class Conversation {
     private var _textOnly as Boolean = false;
     private var _fastTicks as Boolean = false;
     private var _voice as Voice?;
+    // The open reply poll and ping - abandoned when their command or key is given up
+    private var _replyRequest as AnswerRequest?;
+    // The command's end ("final") has been sent: from then on Home Assistant runs it
+    private var _finalSent as Boolean = false;
+    private var _pingRequest as AnswerRequest?;
     private var _answeredAt as Number = 0;   // the house's last answer in this command
+    private var _listenUntil as Number = 0;  // listening ends by itself then
+    private var _answerUntil as Number = 0;  // 0: listening; then the reply text is due by then
+    private var _finalsAgain as Number = 0;
     private var _noAnswers as Number = 0;    // NO_ANSWER_MS errors in a row
     private var _pingResult as Result?;
     // Timers (watches limit how many may run): one for ticks and the popup, one for waits (pairing
@@ -126,7 +142,7 @@ class Conversation {
         _client = client;
         _recorder = recorder;
         _player = player;
-        pairing = new Pairing(client, _waitTimer, method(:onPaired));
+        pairing = new Pairing(client, _waitTimer, method(:onPaired), method(:onPairingGaveUp));
         idle = new IdleClose(method(:onIdleWarning));
     }
 
@@ -141,7 +157,7 @@ class Conversation {
         }
         _started = true;
         if (Settings.key() == null) {
-            // A paired watch once opened on pairing with its key still stored (2026-11-08): the key
+            // A paired watch once opened on pairing with its key still stored: the key
             // is read once more after a moment; nothing shows meanwhile
             setState(STATE_CONNECTING, SHOW_WAITING);
             waitThen(KEY_REREAD_MS, method(:onKeyReread));
@@ -171,10 +187,14 @@ class Conversation {
             setState(STATE_IDLE, SHOW_AFTER_HOLD);
             armIdleExit(Settings.idleExitMs());
         }
-        _client.ping(method(:onPing));
+        abandon(_pingRequest);
+        var ping = new AnswerRequest(method(:onPing));
+        _pingRequest = ping;
+        _client.ping(ping.method(:onResult));
     }
 
     function onPing(result as Result) as Void {
+        _pingRequest = null;
         if (state != STATE_CONNECTING) {
             // The check in the background (not listening on open), or one that came too late
             if (result.kind == RESULT_UNAUTHORIZED) {
@@ -217,8 +237,13 @@ class Conversation {
     function onSettingsChanged() as Void {
         if (Settings.key() == null && state != STATE_PAIRING) {
             reconnect();
-        } else if (state == STATE_PAIRING && pairing.code.length() == 0 && !_inBackground) {
-            pairing.begin();
+        } else if (state == STATE_PAIRING && !_inBackground) {
+            if (!Settings.houseUrl().equals(pairing.address())) {
+                // A new address drops the pairing (and the code) kept for the old one
+                pairing.restart();
+            } else if (pairing.code.length() == 0) {
+                pairing.begin();
+            }
         }
         WatchUi.requestUpdate();
     }
@@ -255,6 +280,9 @@ class Conversation {
     }
 
     private function reconnect() as Void {
+        // A late answer of the old key must not reach the new pairing (a 401 would delete the new key)
+        abandon(_pingRequest);
+        _pingRequest = null;
         Settings.clearKey();
         Settings.clearPairingInProgress();
         stopCommand();
@@ -268,6 +296,11 @@ class Conversation {
         stopPulse();
         idle.stop();  // no idle time while pairing: in the background it asks nothing anyway
         pairing.begin();
+    }
+
+    //! Pairing asked long enough: the note stays, the app closes after its idle time
+    function onPairingGaveUp() as Void {
+        armIdleExit(Settings.idleExitMs());
     }
 
     //! A new watch for Home Assistant, with a new conversation: the old one goes from the screen
@@ -318,8 +351,14 @@ class Conversation {
         }
         if (state == STATE_LISTENING || state == STATE_RECOGNIZING || state == STATE_SENDING
                 || state == STATE_LOADING_VOICE || state == STATE_PLAYING) {
+            // Once the end of the command is in Home Assistant, BACK only stops waiting for the
+            // reply - the command runs (a gate, a lock, the car): it must not look like a cancel
+            var sent = state == STATE_RECOGNIZING || state == STATE_SENDING || _finalSent;
             stopCommand();
             setState(STATE_IDLE, SHOW_NOW);
+            if (sent) {
+                showPopup(POPUP_COMMAND_SENT, Settings.text(Rez.Strings.CommandSent), VOICE_POPUP_MS);
+            }
             armIdleExit(Settings.idleExitMs());
             WatchUi.requestUpdate();
             return true;
@@ -348,8 +387,8 @@ class Conversation {
         WatchUi.requestUpdate();
     }
 
-    //! A quick switch without a view to show it (a long press on the status line, backlog): with a
-    //! popup
+    //! A quick switch without a view to show it (for a long press on the status line, later): with
+    //! a popup
     function toggleTextOnly() as Void {
         if (onScrollInput()) {
             return;
@@ -398,7 +437,10 @@ class Conversation {
         _audio = []b;
         _sent = 0;
         abandonChunks();
+        abandon(_replyRequest);
+        _replyRequest = null;
         _finalPending = false;
+        _finalSent = false;
         _awaitingRest = false;
         _inputEnded = false;
         _speech = false;
@@ -411,7 +453,10 @@ class Conversation {
         }
         setState(STATE_LISTENING, SHOW_NOW);
         startTicks();
-        waitThen(LISTEN_CAP_MS, method(:finishListening));
+        // Its own deadline, not the wait timer: the first audio re-arms that one for "nothing said"
+        _listenUntil = System.getTimer() + LISTEN_CAP_MS;
+        _answerUntil = 0;
+        _finalsAgain = 0;
         WatchUi.requestUpdate();
     }
 
@@ -438,7 +483,7 @@ class Conversation {
 
     function onAudioData(data as ByteArray) as Void {
         // What the microphone still hands over after the command is known stays on the watch:
-        // sent, it took the phone's bandwidth from the reply (seen 2026-11-05, up to 16 kB)
+        // sent, it took the phone's bandwidth from the reply (up to 16 kB)
         if (!takingAudio() || _inputEnded) {
             return;
         }
@@ -459,7 +504,7 @@ class Conversation {
 
     //! START or the watch's own cap. "Recognising" at once - the press shows, not only when the text
     //! comes back; "final" only once the microphone has handed over what it still holds: sent at
-    //! once, the last words were cut ("... jaki jest status" without "drukarki", 2026-11-05)
+    //! once, the last words of a command were cut
     function finishListening() as Void {
         if (state != STATE_LISTENING) {
             return;
@@ -467,6 +512,7 @@ class Conversation {
         _finalPending = true;
         _awaitingRest = true;
         _answeredAt = System.getTimer();
+        startAnswerDeadline();
         setState(STATE_RECOGNIZING, SHOW_NOW);
         WatchUi.requestUpdate();
         // The flags first: stopping may hand over the rest and report the end at once
@@ -496,6 +542,9 @@ class Conversation {
         }
         var offset = _sent;
         _sent = _audio.size();
+        if (final) {
+            _finalSent = true;
+        }
         send(new ChunkRequest(offset, _sent - offset, final, 1, method(:onChunk)));
     }
 
@@ -524,7 +573,7 @@ class Conversation {
     }
 
     //! Lost on the way through the phone - not refused by Home Assistant. Not "no phone": that
-    //! answer comes at once (0.02 s, measured) and stays until Bluetooth is back
+    //! answer comes at once (0.02 s) and stays until Bluetooth is back
     private function lost(result as Result) as Boolean {
         return result.kind == RESULT_TIMEOUT || result.kind == RESULT_ERROR;
     }
@@ -552,13 +601,44 @@ class Conversation {
     //! error START may fix; the second in a row says to reopen the app (what helped on the watch).
     //! From the ticks; `now` from the caller, so the tests need not wait
     function checkAnswers(now as Number) as Void {
-        if ((state != STATE_RECOGNIZING && state != STATE_SENDING) || now - _answeredAt <= NO_ANSWER_MS) {
+        if (state != STATE_RECOGNIZING && state != STATE_SENDING) {
+            return;
+        }
+        if (now - _answeredAt <= NO_ANSWER_MS && (_answerUntil == 0 || now < _answerUntil)) {
             return;
         }
         _noAnswers++;
         fail(Settings.text(Rez.Strings.ErrTimeout), true);
         if (_noAnswers >= 2) {
             errorHint = Settings.text(Rez.Strings.ReopenToRetry);
+        }
+    }
+
+    //! For the tests only: the house's last answer at a given time (the answers themselves take
+    //! the clock, which a test cannot move)
+    function setAnsweredAt(time as Number) as Void {
+        _answeredAt = time;
+    }
+
+    //! Listening ends by itself at LISTEN_CAP_MS, even while speech goes on (a radio, wind)
+    function checkListening(now as Number) as Void {
+        if (state == STATE_LISTENING && now >= _listenUntil) {
+            finishListening();
+        }
+    }
+
+    //! The end of listening, by START, the cap or Home Assistant: the reply text is due within
+    //! ANSWER_CAP_MS, answers on the way do not move it
+    private function startAnswerDeadline() as Void {
+        if (_answerUntil == 0) {
+            _answerUntil = System.getTimer() + ANSWER_CAP_MS;
+        }
+    }
+
+    //! The empty "final" again, once its moment has passed
+    function sendFinalAgain() as Void {
+        if (state == STATE_RECOGNIZING && _finalPending && !_awaitingRest) {
+            sendChunk(true);
         }
     }
 
@@ -586,13 +666,18 @@ class Conversation {
         }
         var answer = result.text("state");
         if (answer.equals("heard")) {
+            startAnswerDeadline();
+            // The recording is in Home Assistant: not kept for the rest of the command, and chunks
+            // still on their way are not resent
+            abandonChunks();
+            _audio = []b;
             heard = result.text("heard");
             // The state first: stopping the microphone hands over what it still holds
             setState(STATE_SENDING, SHOW_WAITING);
             _recorder.stop();
             _waitTimer.stop();
             buzz(BUZZ_SENT);
-            _client.reply(_session, method(:onReply));
+            askReply();
         } else if (answer.equals("nothing")) {
             notHeard();
         } else if (answer.equals("recognizing")) {
@@ -600,6 +685,7 @@ class Conversation {
             // text (protocol 5): stop listening now; a "listening" without the text later asks
             // again with an empty "final"
             if (state == STATE_LISTENING) {
+                startAnswerDeadline();
                 setState(STATE_RECOGNIZING, SHOW_WAITING);
                 _finalPending = true;
                 _awaitingRest = false;
@@ -607,8 +693,17 @@ class Conversation {
                 _waitTimer.stop();
                 _recorder.stop();
             }
-        } else if (_finalPending && !_awaitingRest) {
+        } else if (_finalPending && !_awaitingRest && !request.final) {
             sendChunk(true);
+        } else if (_finalPending && !_awaitingRest) {
+            // "final" answered without the text: the empty "final" again after a moment, a few
+            // times only - the answer deadline ends it anyway
+            _finalsAgain++;
+            if (_finalsAgain > FINALS_AGAIN) {
+                fail(Settings.text(Rez.Strings.ErrTimeout), true);
+                return;
+            }
+            waitThen(FINAL_AGAIN_MS, method(:sendFinalAgain));
         } else {
             sendChunk(false);
         }
@@ -622,7 +717,22 @@ class Conversation {
         }
     }
 
+    //! The reply poll of this command; the one before it, if any, is given up
+    private function askReply() as Void {
+        abandon(_replyRequest);
+        var request = new AnswerRequest(method(:onReply));
+        _replyRequest = request;
+        _client.reply(_session, request.method(:onResult));
+    }
+
+    private function abandon(request as AnswerRequest?) as Void {
+        if (request != null) {
+            request.abandoned = true;
+        }
+    }
+
     function onReply(result as Result) as Void {
+        _replyRequest = null;
         if (state != STATE_SENDING) {
             return;
         }
@@ -632,7 +742,7 @@ class Conversation {
         }
         _answeredAt = System.getTimer();
         if (result.text("state").equals("waiting")) {
-            _client.reply(_session, method(:onReply));
+            askReply();
             return;
         }
         _noAnswers = 0;
@@ -708,6 +818,10 @@ class Conversation {
 
     private function stopCommand() as Void {
         abandonChunks();
+        _audio = []b;
+        // A reply poll still open belongs to this command: its late answer must not land on the next
+        abandon(_replyRequest);
+        _replyRequest = null;
         _waitTimer.stop();
         _recorder.stop();
         stopVoice();
@@ -749,7 +863,7 @@ class Conversation {
     }
 
     //! The app stays open after any number of errors - the idle countdown closes it, as always
-    //! (closing by itself after two errors came before the message could be read, 2026-11-05)
+    //! (closing by itself after two errors came before the message could be read)
     private function fail(message as String, retryHelps as Boolean) as Void {
         stopCommand();
         buzz(BUZZ_ERROR);
@@ -966,6 +1080,7 @@ class Conversation {
         tick++;
         stepPulse(now);
         checkChunks(now);
+        checkListening(now);
         checkAnswers(now);
         checkVoice(now);
         var changed = shown.update(now);
@@ -985,7 +1100,7 @@ class Conversation {
         }
         // While the voice plays the ticks only watch it: the screen is drawn when something on it
         // changes (the voice's states ask for it themselves) - not ten times a second over the
-        // playing, which crackled now and then on long replies (fēnix 8, 2026-11-10)
+        // playing, which crackled now and then on long replies on the fēnix 8
         if (changed || _animating || pulsing || _voice == null) {
             WatchUi.requestUpdate();
         }

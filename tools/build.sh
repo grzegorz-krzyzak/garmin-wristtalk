@@ -17,6 +17,18 @@ KEY="${CIQ_KEY:-$HOME/.connectiq/developer_key.der}"
 DEVICE="${CIQ_DEVICE:-fenix8solar51mm}"
 mkdir -p bin
 
+# The manifest's version is the one the store shows; Settings.APP_VERSION the one the menu shows and
+# Home Assistant gets - a package with two versions is not built
+one_version() {
+    local manifest code
+    manifest=$(sed -n 's/.*<iq:application[^>]* version="\([^"]*\)".*/\1/p' manifest.xml)
+    code=$(sed -n 's/.*const APP_VERSION = "\([^"]*\)".*/\1/p' source/logic/Settings.mc)
+    [ -n "$manifest" ] && [ "$manifest" = "$code" ] || {
+        echo "manifest.xml $manifest, Settings.APP_VERSION $code - make them the same" >&2
+        exit 1
+    }
+}
+
 dev_config() {
     local idle="${1:-300000}"
     local url=""
@@ -66,9 +78,11 @@ case "${1:-dev}" in
         "$SDK/bin/monkeydo" bin/wristtalk-test.prg "$DEVICE" -t
         ;;
     release)
+        one_version
         "$SDK/bin/monkeyc" -f monkey.jungle -e -r -l 3 -o bin/wristtalk.iq -y "$KEY"
         ;;
     beta)
+        one_version
         # The store keeps a beta as its own app: the manifest with another id, nothing else differs
         sed 's/id="d106fb6d536e4d0f895290732d14ce5f"/id="6ab4b31f161c45e78416dda9360aefa8"/' manifest.xml > manifest-beta.xml
         grep -q 6ab4b31f161c45e78416dda9360aefa8 manifest-beta.xml || { echo "the app id in manifest.xml changed" >&2; exit 1; }

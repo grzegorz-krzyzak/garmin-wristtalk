@@ -9,8 +9,6 @@
     <property id="replyMode" type="number">0</property>
     <!-- Reply volume: 0 = quiet, 1 = medium, 2 = loud -->
     <property id="volume" type="number">1</property>
-    <!-- Text size: 0 = small, 1 = large -->
-    <property id="textSize" type="number">0</property>
     <!-- 0 = full (start, sent, reply, error), 1 = minimal (reply, error), 2 = off -->
     <property id="vibration" type="number">1</property>
     <!-- Close after this many seconds without input -->

@@ -185,8 +185,8 @@ class AssistView extends WatchUi.View {
                 Graphics.COLOR_WHITE);
         }
 
-        // XTINY: TINY fits only three lines of a reply on this screen - TINY is the "large" setting
-        var font = Settings.largeText() ? Graphics.FONT_TINY : Graphics.FONT_XTINY;
+        // XTINY: TINY fits only three lines of a reply on this screen and cut the last bubble
+        var font = Graphics.FONT_XTINY;
         var items = [] as Array<Array>;
         var anchor = -1;  // the latest command - it stays at the top of the conversation area
         for (var i = 0; i < c.history.size(); i++) {
@@ -237,7 +237,7 @@ class AssistView extends WatchUi.View {
         if (c.popup.length() > 0 && c.shown.settled()) {
             var kind = c.popupKind;
             drawNotice(dc, lineY,
-                kind == POPUP_PAIRED ? NOTICE_DONE : kind == POPUP_NOT_HEARD ? NOTICE_QUESTION
+                kind == POPUP_PAIRED || kind == POPUP_COMMAND_SENT ? NOTICE_DONE : kind == POPUP_NOT_HEARD ? NOTICE_QUESTION
                     : kind == POPUP_TEXT_ONLY || kind == POPUP_VOICE_FAILED ? NOTICE_SPEAKER_OFF : NOTICE_SPEAKER,
                 c.popup, kind == POPUP_NOT_HEARD ? Settings.text(Rez.Strings.NotHeardHint) : "");
             return;
@@ -285,7 +285,7 @@ class AssistView extends WatchUi.View {
             drawSpeaker(dc, cx, cy, icon == NOTICE_SPEAKER_OFF, 1.6, Graphics.COLOR_WHITE);
         }
         y += 2 * MARK_RADIUS + 8;
-        var font = Settings.largeText() ? Graphics.FONT_TINY : Graphics.FONT_XTINY;
+        var font = Graphics.FONT_XTINY;
         var text = Graphics.fitTextToArea(message, font, w * 0.72, h * 0.3, true);
         if (text != null) {
             dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);

@@ -9,24 +9,6 @@ enum VoiceEnd {
     VOICE_UNAUTHORIZED    // the key was refused meanwhile: pair again
 }
 
-//! One request for a piece of the voice; a request given up is abandoned - its late answer is
-//! ignored
-class VoicePieceRequest {
-
-    var abandoned as Boolean = false;
-    private var _onResult as Method(result as Result) as Void;
-
-    function initialize(onResult as Method(result as Result) as Void) {
-        _onResult = onResult;
-    }
-
-    function onResult(result as Result) as Void {
-        if (!abandoned) {
-            _onResult.invoke(result);
-        }
-    }
-}
-
 //! The reply's voice while it is being made (protocol 6): it asks Home Assistant for the pieces
 //! one after another and plays once a few seconds of speech are in hand. A stall (the pieces
 //! slower than the speech) waits for that margin again and revives the player; a voice that does
@@ -35,7 +17,7 @@ class VoicePieceRequest {
 class Voice {
 
     // In hand before playing: at the start and after a stall 3 s (no stall followed at the phone's
-    // pace, watch test 3d, 2026-11-10); after a second stall 6 s; after a third the whole voice
+    // pace on the watch); after a second stall 6 s; after a third the whole voice
     const MARGIN_MS = 3000;
     const SECOND_MARGIN_MS = 6000;
     const WHOLE_AFTER_STALLS = 3;
@@ -49,10 +31,13 @@ class Voice {
     // A stall shows ("Loading voice") once it has lasted this long - as ShownState.SHOW_MS: a
     // shorter one is only a gap heard
     const WAITING_SHOW_MS = 700;
-    // The revival measured on the watch: pause, this long, resume (3b)
+    // The revival that worked on the watch: pause, this long, resume
     const PAUSE_MS = 300;
-    // Resumed but not moving this long: a new stream from the stalled page (3c, repeats ~0.7 s)
+    // Resumed but not moving this long: a new stream from the stalled page (repeats ~0.7 s)
     const MOVE_MS = 1000;
+    // All of the voice handed over and the position not moving this long: it has ended, even if the
+    // player's "stopped" never came
+    const END_STILL_MS = 3000;
 
     //! The sound has started
     var playing as Boolean = false;
@@ -68,7 +53,7 @@ class Voice {
     private var _holdLeft as Method(now as Number) as Number;
 
     private var _pages as OggPages = new OggPages();
-    private var _request as VoicePieceRequest?;
+    private var _request as AnswerRequest?;
     private var _failures as Number = 0;
     private var _cut as Boolean = false;      // nothing more comes, the voice did not end
     private var _over as Boolean = false;
@@ -81,6 +66,8 @@ class Voice {
     private var _resumedAt as Number = -1;
     private var _resumePos as Number = 0;
     private var _base as Number = 0;          // where the current stream starts in the speech (ms)
+    private var _lastPos as Number = -1;
+    private var _movedAt as Number = 0;
 
     function initialize(client as HaClient, player as Player, session as String, volume as Number,
             onPlaying as Method() as Void, onWaiting as Method() as Void,
@@ -114,14 +101,14 @@ class Voice {
         if (_over || _cut || _pages.ended || _request != null) {
             return;
         }
-        var request = new VoicePieceRequest(method(:onPiece));
+        var request = new AnswerRequest(method(:onPiece));
         _request = request;
         _client.audioPiece(_session, _pages.size, request.method(:onResult));
     }
 
     private function abandon() as Void {
         if (_request != null) {
-            (_request as VoicePieceRequest).abandoned = true;
+            (_request as AnswerRequest).abandoned = true;
             _request = null;
         }
     }
@@ -134,9 +121,14 @@ class Voice {
         var now = System.getTimer();
         if (result.ok() && result.data instanceof ByteArray) {
             var piece = result.data as ByteArray;
-            // A piece that is not whole pages, or skips one, is asked again from the same offset
+            // A piece that is not whole pages, or skips one, is asked again from the same offset;
+            // a voice past the watch's cap ends here, as cut off
             if (!_pages.add(piece)) {
-                failed();
+                if (_pages.full) {
+                    cutHere(now);
+                } else {
+                    failed();
+                }
                 return;
             }
             _failures = 0;
@@ -207,6 +199,16 @@ class Voice {
             return;
         }
         var pos = _base + _player.position();
+        if ((_pages.ended || _cut) && _pausedAt < 0 && _resumedAt < 0) {
+            if (pos != _lastPos) {
+                _lastPos = pos;
+                _movedAt = now;
+            } else if (now - _movedAt >= END_STILL_MS) {
+                _player.stop();
+                finish(_pages.ended && !_cut ? VOICE_DONE : VOICE_CUT_OFF);
+                return;
+            }
+        }
         if (_pausedAt >= 0) {
             if (now - _pausedAt >= PAUSE_MS) {
                 _pausedAt = -1;
@@ -268,10 +270,17 @@ class Voice {
     }
 
     private function begin() as Void {
-        // All of it here already (a short reply, or a cut one): played whole, not as a stream
-        if (!_player.start(_pages.bytes(0), _volume, _pages.ended || _cut, method(:onPlayed))) {
+        // All of it here already (a short reply, or a cut one): played whole, not as a stream; a
+        // stream gets the pieces themselves, not a copy
+        var whole = _pages.ended || _cut;
+        if (!_player.start(whole ? _pages.bytes(0) : _pages.piece(0), _volume, whole, method(:onPlayed))) {
             finish(VOICE_DONE);  // no speaker: the reply text is on screen
             return;
+        }
+        if (!whole) {
+            for (var i = 1; i < _pages.pieceCount(); i++) {
+                _player.add(_pages.piece(i));
+            }
         }
         playing = true;
         _onPlaying.invoke();

@@ -9,13 +9,20 @@ class OggPages {
     const HEADER = 27;           // "OggS", version, flags, granule, serial, sequence, CRC, segments
     const END_OF_STREAM = 0x04;
     const GRANULES_PER_MS = 48;  // Opus granules: 48 kHz
+    // The whole voice kept on the watch at most (the integration's own cap): past it the voice is cut
+    const MAX_BYTES = 256 * 1024;
 
     //! Bytes in so far - the offset to ask from next
     var size as Number = 0;
     //! The last page has come
     var ended as Boolean = false;
+    //! A piece would pass MAX_BYTES: nothing more is taken
+    var full as Boolean = false;
 
-    private var _data as ByteArray = []b;
+    // The pieces as they came - not joined into one array: the player's source keeps the same
+    // pieces, so the voice is in memory once
+    private var _pieces as Array<ByteArray> = [] as Array<ByteArray>;
+    private var _offsets as Array<Number> = [] as Array<Number>;
     private var _starts as Array<Number> = [] as Array<Number>;
     private var _granules as Array<Number> = [] as Array<Number>;
     private var _headerEnd as Number = 0;  // after the two header pages (OpusHead, OpusTags)
@@ -26,6 +33,10 @@ class OggPages {
     //! True when the piece was whole pages, the next in number; nothing is taken otherwise
     function add(piece as ByteArray) as Boolean {
         if (ended || piece.size() == 0) {
+            return false;
+        }
+        if (size + piece.size() > MAX_BYTES) {
+            full = true;
             return false;
         }
         var starts = [] as Array<Number>;
@@ -60,7 +71,8 @@ class OggPages {
             sequence++;
             pos += length;
         }
-        _data.addAll(piece);
+        _pieces.add(piece);
+        _offsets.add(size);
         _starts.addAll(starts);
         _granules.addAll(granules);
         size += piece.size();
@@ -76,9 +88,18 @@ class OggPages {
         return _granules.size() > 0 ? _granules[_granules.size() - 1] / GRANULES_PER_MS : 0;
     }
 
-    //! The bytes from `offset` on
+    //! The bytes from `offset` on, joined (a copy)
     function bytes(offset as Number) as ByteArray {
-        return _data.slice(offset, null);
+        return range(offset, size);
+    }
+
+    function pieceCount() as Number {
+        return _pieces.size();
+    }
+
+    //! A piece as it came (read only: the player's source keeps it as it is)
+    function piece(index as Number) as ByteArray {
+        return _pieces[index];
     }
 
     //! A new stream from the page holding `positionMs`: the header pages, then that page and the
@@ -88,8 +109,8 @@ class OggPages {
         if (page < 0) {
             return null;
         }
-        var data = _data.slice(0, _headerEnd);
-        data.addAll(_data.slice(_starts[page], null));
+        var data = range(0, _headerEnd);
+        data.addAll(range(_starts[page], size));
         return data;
     }
 
@@ -111,6 +132,22 @@ class OggPages {
             }
         }
         return -1;
+    }
+
+    //! The bytes from `from` to `to`, across the pieces, joined
+    private function range(from as Number, to as Number) as ByteArray {
+        var data = []b;
+        for (var i = 0; i < _pieces.size(); i++) {
+            var start = _offsets[i];
+            var end = start + _pieces[i].size();
+            if (end <= from || start >= to) {
+                continue;
+            }
+            var a = from > start ? from - start : 0;
+            var b = to < end ? to - start : _pieces[i].size();
+            data.addAll(a == 0 && b == _pieces[i].size() ? _pieces[i] : _pieces[i].slice(a, b));
+        }
+        return data;
     }
 
     private function isPageStart(data as ByteArray, pos as Number) as Boolean {

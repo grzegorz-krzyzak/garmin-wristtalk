@@ -14,7 +14,7 @@ class AssistDelegate extends WatchUi.BehaviorDelegate {
     }
 
     // A physical button was pressed just now: a "select" right after it is START, a "select" without
-    // it is a tap on the screen (the fēnix 8 turns both into the same select, measured 2026-11-04;
+    // it is a tap on the screen (the fēnix 8 turns both into the same select;
     // onKey never gets START - key 4, KEY_ENTER - only onKeyPressed does)
     private var _keyAt as Number = -10000;
     const SWIPE_LINES = 4;
