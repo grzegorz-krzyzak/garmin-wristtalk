@@ -35,9 +35,16 @@ class Voice {
     const PAUSE_MS = 300;
     // Resumed but not moving this long: a new stream from the stalled page (repeats ~0.7 s)
     const MOVE_MS = 1000;
-    // All of the voice handed over and the position not moving this long: it has ended, even if the
-    // player's "stopped" never came
+    // All of the voice handed over and the position, once it moved, not moving this long: it has
+    // ended, even if the player's "stopped" never came. Only once it moved: a voice played whole
+    // reports position 0 all along on the fēnix 8 (beta 1.6.8: a 6.3 s reply stopped after 3 s) -
+    // there the player's own end ends it, as before this watchdog
     const END_STILL_MS = 3000;
+    // A voice played whole whose "stopped" never comes: the screen is ready again after its speech
+    // and this margin - the sound is not stopped, the user stops it (START, BACK). Measured on the
+    // fēnix 8 (beta 1.6.10): the player's end came every time, 54 ms before to 109 ms after the
+    // speech's length - the largest rounded up to 1 s, and 1 s more
+    static const NET_MARGIN_MS = 2000;
 
     //! The sound has started
     var playing as Boolean = false;
@@ -68,6 +75,9 @@ class Voice {
     private var _base as Number = 0;          // where the current stream starts in the speech (ms)
     private var _lastPos as Number = -1;
     private var _movedAt as Number = 0;
+    private var _moved as Boolean = false;    // the position has changed since playing started
+    private var _playStartAt as Number = -1;  // when the player started (timer)
+    private var _whole as Boolean = false;    // played as one source: its position does not move
 
     function initialize(client as HaClient, player as Player, session as String, volume as Number,
             onPlaying as Method() as Void, onWaiting as Method() as Void,
@@ -199,11 +209,18 @@ class Voice {
             return;
         }
         var pos = _base + _player.position();
+        // The net: a voice played whole has no moving position, only the player's own end
+        if (_whole && _pages.ended && now - _playStartAt >= _pages.speechMs() + NET_MARGIN_MS) {
+            _player.detach();
+            finish(VOICE_DONE);
+            return;
+        }
         if ((_pages.ended || _cut) && _pausedAt < 0 && _resumedAt < 0) {
             if (pos != _lastPos) {
+                _moved = _moved || _lastPos >= 0;
                 _lastPos = pos;
                 _movedAt = now;
-            } else if (now - _movedAt >= END_STILL_MS) {
+            } else if (_moved && now - _movedAt >= END_STILL_MS) {
                 _player.stop();
                 finish(_pages.ended && !_cut ? VOICE_DONE : VOICE_CUT_OFF);
                 return;
@@ -273,6 +290,7 @@ class Voice {
         // All of it here already (a short reply, or a cut one): played whole, not as a stream; a
         // stream gets the pieces themselves, not a copy
         var whole = _pages.ended || _cut;
+        _whole = whole;
         if (!_player.start(whole ? _pages.bytes(0) : _pages.piece(0), _volume, whole, method(:onPlayed))) {
             finish(VOICE_DONE);  // no speaker: the reply text is on screen
             return;
@@ -283,6 +301,7 @@ class Voice {
             }
         }
         playing = true;
+        _playStartAt = System.getTimer();
         _onPlaying.invoke();
     }
 

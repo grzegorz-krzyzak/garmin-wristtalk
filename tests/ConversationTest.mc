@@ -118,6 +118,7 @@ class FakePlayer extends Player {
     var pauses as Number = 0;
     var resumes as Number = 0;
     var restarts as Number = 0;
+    var detached as Boolean = false;
     private var _onDone as Method(ok as Boolean) as Void or Null;
 
     function initialize() {
@@ -160,6 +161,10 @@ class FakePlayer extends Player {
 
     function stop() as Void {
         stopped = true;
+    }
+
+    function detach() as Void {
+        detached = true;
     }
 
     //! The player reports its end: played out (true) or failed

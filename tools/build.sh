@@ -5,8 +5,6 @@
 #                             so the house address is built in); closes when idle as set
 #   tools/build.sh test     - unit tests (Run No Evil) in the running simulator
 #   tools/build.sh release  - strict type check, no debug information, .iq for the store
-#   tools/build.sh beta     - the same as a separate store app (its own id): a private beta, only for
-#                             the developer's account
 #   tools/build.sh run      - dev build, then start it in the simulator
 #   tools/build.sh start    - start the last dev build again (simulator opened if needed), in the background;
 #                             what the simulator prints goes to bin/simulator.log
@@ -79,22 +77,15 @@ case "${1:-dev}" in
         ;;
     release)
         one_version
+        # Beta-only diagnostics are marked BETA-DIAG and never go into a release
+        if grep -rn "BETA-DIAG" source source-app source-release tests; then
+            echo "BETA-DIAG code still in - remove it before the release" >&2
+            exit 1
+        fi
         "$SDK/bin/monkeyc" -f monkey.jungle -e -r -l 3 -o bin/wristtalk.iq -y "$KEY"
         ;;
-    beta)
-        one_version
-        # The store keeps a beta as its own app: the manifest with another id, nothing else differs
-        sed 's/id="d106fb6d536e4d0f895290732d14ce5f"/id="6ab4b31f161c45e78416dda9360aefa8"/' manifest.xml > manifest-beta.xml
-        grep -q 6ab4b31f161c45e78416dda9360aefa8 manifest-beta.xml || { echo "the app id in manifest.xml changed" >&2; exit 1; }
-        # A jungle of its own (a project's manifest cannot be reset by a second jungle), at the root so
-        # the resource folders are found as usual; generated, not in git
-        printf 'project.manifest = manifest-beta.xml\nbase.sourcePath = source;source-app;source-release\n' > beta.jungle
-        "$SDK/bin/monkeyc" -f beta.jungle -e -r -l 3 -o bin/wristtalk-beta.iq -y "$KEY"
-        rm -f beta.jungle manifest-beta.xml
-        echo "bin/wristtalk-beta.iq - upload it at apps-developer.garmin.com as a beta app"
-        ;;
     *)
-        echo "usage: $0 dev|device|run|start|test|release|beta" >&2
+        echo "usage: $0 dev|device|run|start|test|release" >&2
         exit 2
         ;;
 esac

@@ -17,6 +17,7 @@ class Player {
     private var _source as VoiceSource?;
     private var _playing as Boolean = false;
     private var _replacedStops as Number = 0;
+    private var _detached as Boolean = false;  // still playing, its end reaching nothing
 
     function initialize() {
     }
@@ -32,7 +33,9 @@ class Player {
         }
         try {
             _onDone = onDone;
-            _replacedStops = 0;
+            // A detached voice's "stopped" may come after this one started: taken for that one
+            _replacedStops = _detached ? 1 : 0;
+            _detached = false;
             Audio.Output.registerStateChangeHandler(method(:onState));
             Audio.Output.setVolume(volume);
             if (whole) {
@@ -90,7 +93,14 @@ class Player {
         play(data, finished);
     }
 
+    //! The voice is over for the app (its net) but the sound plays on: its end reaches nothing
+    function detach() as Void {
+        _onDone = null;
+        _detached = _playing;
+    }
+
     function stop() as Void {
+        _detached = false;
         release();
         _source = null;
         if (_playing) {
@@ -139,6 +149,7 @@ class Player {
             return;
         }
         _playing = false;
+        _detached = false;
         _source = null;
         var onDone = _onDone;
         release();

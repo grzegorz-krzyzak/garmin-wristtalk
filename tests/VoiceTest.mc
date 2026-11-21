@@ -474,3 +474,55 @@ function aVoiceThatStopsMovingAfterItsEndIsDone(logger as Test.Logger) as Boolea
     ConversationTests.tearDown(c);
     return true;
 }
+
+(:test)
+function aWholeVoiceIsNotCutWhileItsPositionStaysAtZero(logger as Test.Logger) as Boolean {
+    // fēnix 8 (beta 1.6.8): a 6.3 s reply came whole in its first piece and played whole; the
+    // player's position stays 0 then, and the "not moving for 3 s" watchdog stopped it after 3 s
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    var player = t[3] as FakePlayer;
+    VoiceTests.toVoice(c, client);
+    client.answer(RESULT_OK, 200, VoiceTests.pages(0, [0, 0, 2000, 4000, 6300] as Array<Number>, true));
+    Test.assertEqual(c.state, STATE_PLAYING);
+    Test.assert(player.whole);
+    var now = System.getTimer();
+    player.pos = 0;
+    c.checkVoice(now);
+    c.checkVoice(now + 3100);
+    c.checkVoice(now + 6000);
+    // Still playing: the player's own end ends it
+    Test.assertEqual(c.state, STATE_PLAYING);
+    Test.assert(!player.stopped);
+    player.end(true);
+    Test.assertEqual(c.state, STATE_IDLE);
+    Test.assertEqual(c.popup, "");
+    ConversationTests.tearDown(c);
+    return true;
+}
+
+(:test)
+function aWholeVoiceWhoseEndNeverComesFreesTheScreenWithoutStoppingIt(logger as Test.Logger) as Boolean {
+    // The net only makes the screen ready again; the sound is the user's to stop
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    var player = t[3] as FakePlayer;
+    VoiceTests.toVoice(c, client);
+    client.answer(RESULT_OK, 200, VoiceTests.pages(0, [0, 0, 2000, 4000, 6300] as Array<Number>, true));
+    Test.assert(player.whole);
+    var now = System.getTimer();
+    c.checkVoice(now + 6300 + Voice.NET_MARGIN_MS - 500);
+    Test.assertEqual(c.state, STATE_PLAYING);
+    c.checkVoice(now + 6300 + Voice.NET_MARGIN_MS + 500);
+    Test.assertEqual(c.state, STATE_IDLE);
+    Test.assert(!player.stopped);
+    Test.assert(player.detached);
+    // Its "stopped" coming later changes nothing
+    player.end(true);
+    Test.assertEqual(c.state, STATE_IDLE);
+    Test.assertEqual(c.popup, "");
+    ConversationTests.tearDown(c);
+    return true;
+}
