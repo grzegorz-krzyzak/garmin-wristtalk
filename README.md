@@ -73,9 +73,11 @@ it as the default. The dev build closes after 5 minutes without input; started w
 - `source-release`, `source-dev` (generated) - build profiles.
 - `tests` - unit tests of the logic with fake connection, microphone and speaker.
 
-## Support
+## Contact & support
 
-WristTalk is free. If it is useful to you, you can support it on [GitHub Sponsors](https://github.com/sponsors/grzegorz-krzyzak).
+- **Something not working?** [Report it on GitHub](https://github.com/grzegorz-krzyzak/ha-wristtalk/issues) - one place for the watch app and the integration. Do not paste your house address.
+- **No GitHub account, a question or an idea?** Write to [wristtalk.app@gmail.com](mailto:wristtalk.app@gmail.com).
+- **WristTalk is free.** If it is useful to you, you can support it on [GitHub Sponsors](https://github.com/sponsors/grzegorz-krzyzak).
 
 ## Licence
 
