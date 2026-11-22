@@ -1,0 +1,9 @@
+<!-- WristTalk as a watch face complication: Face It and the Connect IQ faces that take other apps'
+     complications show it; holding it opens WristTalk. The value is the text from the settings. -->
+<resources>
+    <complications>
+        <complication id="0" access="public" longLabel="@Strings.AppName" icon="@Drawables.ComplicationIcon">
+            <faceIt defaultText="@Strings.AppName" />
+        </complication>
+    </complications>
+</resources>

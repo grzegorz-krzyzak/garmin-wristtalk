@@ -209,10 +209,11 @@ class Voice {
             return;
         }
         var pos = _base + _player.position();
-        // The net: a voice played whole has no moving position, only the player's own end
-        if (_whole && _pages.ended && now - _playStartAt >= _pages.speechMs() + NET_MARGIN_MS) {
+        // The net: a voice played whole has no moving position, only the player's own end - also one
+        // cut before it started, played whole with what came
+        if (_whole && (_pages.ended || _cut) && now - _playStartAt >= _pages.speechMs() + NET_MARGIN_MS) {
             _player.detach();
-            finish(VOICE_DONE);
+            finish(_pages.ended && !_cut ? VOICE_DONE : VOICE_CUT_OFF);
             return;
         }
         if ((_pages.ended || _cut) && _pausedAt < 0 && _resumedAt < 0) {

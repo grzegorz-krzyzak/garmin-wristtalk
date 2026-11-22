@@ -49,6 +49,9 @@
     <string id="ReopenToRetry">Zamknij WristTalk i otwórz ponownie</string>
     <string id="NoReply">Bez odpowiedzi</string>
     <string id="HelpTitle">Pomoc</string>
+    <string id="ComplicationTextTitle">Tekst na tarczy</string>
+    <string id="ComplicationTextPrompt">Pokazywany obok ikony WristTalk na tarczy zegarka (Face It i niektóre tarcze Connect IQ). Do 12 znaków; puste pole - sama ikona.</string>
+    <string id="ComplicationTextError">Najwyżej 12 znaków</string>
     <string id="HouseUrlTitle">Adres domu</string>
     <string id="HouseUrlError">Adres musi zaczynać się od https:// i wskazywać twój Home Assistant</string>
     <string id="HouseUrlPrompt">Adres https:// z integracji WristTalk w Home Assistant</string>

@@ -144,6 +144,12 @@ class Conversation {
         _player = player;
         pairing = new Pairing(client, _waitTimer, method(:onPaired), method(:onPairingGaveUp));
         idle = new IdleClose(method(:onIdleWarning));
+        Deferred.wake = method(:onDeferred);
+    }
+
+    //! A request's answer waits for a tick (net/Deferred)
+    function onDeferred() as Void {
+        runTicks();
     }
 
     // --- app lifecycle ------------------------------------------------------------------------
@@ -249,6 +255,7 @@ class Conversation {
     }
 
     function shutdown() as Void {
+        Deferred.clear();
         _waitTimer.stop();
         idle.stop();
         _tickTimer.stop();
@@ -1045,10 +1052,11 @@ class Conversation {
         }
     }
 
-    //! The fast ticks: an animation, a timed popup, the screen catching up with the state, or the
-    //! voice (its limits, a stall and its revival)
+    //! The fast ticks: an animation, a timed popup, the screen catching up with the state, the
+    //! voice (its limits, a stall and its revival), or a request's answer waiting (net/Deferred)
     private function fastTicksNeeded() as Boolean {
-        return _animating || (popup.length() > 0 && _popupUntil > 0) || !shown.settled() || _voice != null;
+        return _animating || (popup.length() > 0 && _popupUntil > 0) || !shown.settled() || _voice != null
+            || Deferred.pending();
     }
 
     private function startTicks() as Void {
@@ -1076,6 +1084,7 @@ class Conversation {
     }
 
     function onTick() as Void {
+        Deferred.flush();
         var now = System.getTimer();
         tick++;
         stepPulse(now);

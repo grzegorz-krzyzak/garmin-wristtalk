@@ -19,15 +19,18 @@ first version supports the fēnix 8 Solar 51 mm; more models will follow.
 1. In Home Assistant: WristTalk -> **Add watch**. Set the house address it shows in the app's
    settings in the Connect IQ app on the phone.
 2. Open WristTalk on the watch: it shows a pairing code. Type it in Home Assistant.
-3. Open the app from the glance list (DOWN, START) and speak. START ends the command early, BACK
-   cancels, UP/DOWN scroll the conversation, hold UP opens the menu (text only, pair again, the version).
+3. Open the app from the glance list (DOWN, START), or hold WristTalk on a watch face that shows it
+   (Face It, Connect IQ faces that take other apps' complications), and speak. START ends the command
+   early, BACK cancels, UP/DOWN scroll the conversation, hold UP opens the menu (text only, pair again,
+   the version).
 
 The watch can do everything you exposed to Assist in Home Assistant, also over the internet: turn on
 the watch's passcode, and delete a lost watch in Home Assistant (its key stops working at once).
 
 Settings in the Connect IQ app: house address, listen as soon as it opens, after a reply
 (wait for START / keep listening), reply (voice and text / text only), volume,
-vibration, close when idle, and a link to the help page.
+vibration, close when idle, the watch face text (up to 12 characters; empty: the icon alone), and a
+link to the help page.
 
 The conversation language (speech-to-text, agent, voice) is the one of the Assist pipeline chosen
 for the watch in Home Assistant; the watch language sets only the app's own texts (English and

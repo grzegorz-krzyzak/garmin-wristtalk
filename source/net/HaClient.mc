@@ -206,6 +206,12 @@ class PendingRequest {
     private var _options as Dictionary;
     private var _done as Method(result as Result) as Void;
     private var _retries as Number;
+    private var _sending as Boolean = false;
+    private var _code as Number = 0;
+    private var _data as Dictionary or String or ByteArray or Null = null;
+    //! The unit tests' phone; null - Connect IQ's own
+    var transport as Method(url as String, params as Dictionary<Object, Object>?, options as Dictionary,
+        callback as Method(code as Number, data as Dictionary or String or ByteArray or Null) as Void) as Void or Null = null;
 
     function initialize(url as String, params as Dictionary<Object, Object>?, options as Dictionary,
             done as Method(result as Result) as Void, retries as Number) {
@@ -220,13 +226,36 @@ class PendingRequest {
     //! at once with only the code and the data (a three-argument callback crashed the app with "Not
     //! Enough Arguments" on the fēnix 8)
     function send() as Void {
-        Communications.makeWebRequest(_url, _params, _options as {
-            :method as Communications.HttpRequestMethod, :headers as Dictionary,
-            :body as String or ByteArray, :responseType as Communications.HttpResponseContentType
-        }, method(:onResponse));
+        _sending = true;
+        if (transport != null) {
+            transport.invoke(_url, _params, _options, method(:onResponse));
+        } else {
+            Communications.makeWebRequest(_url, _params, _options as {
+                :method as Communications.HttpRequestMethod, :headers as Dictionary,
+                :body as String or ByteArray, :responseType as Communications.HttpResponseContentType
+            }, method(:onResponse));
+        }
+        _sending = false;
     }
 
     function onResponse(code as Number, data as Dictionary or String or ByteArray or Null) as Void {
+        if (_sending) {
+            // Answered inside the send: on from the next tick (Deferred)
+            _code = code;
+            _data = data;
+            Deferred.add(method(:deliver));
+            return;
+        }
+        handle(code, data);
+    }
+
+    function deliver() as Void {
+        var data = _data;
+        _data = null;
+        handle(_code, data);
+    }
+
+    private function handle(code as Number, data as Dictionary or String or ByteArray or Null) as Void {
         if (shouldRetry(code, _retries)) {
             _retries--;
             send();
@@ -238,5 +267,41 @@ class PendingRequest {
 
     static function shouldRetry(code as Number, retries as Number) as Boolean {
         return retries > 0 && code == Communications.NETWORK_REQUEST_TIMED_OUT;
+    }
+}
+
+//! Answers Connect IQ gave while their request was still being sent (without the phone it answers
+//! at once, inside makeWebRequest): handed on from the app's next tick, never from inside the send -
+//! a request sent again from such an answer would nest in it, and the watch's stack is small
+module Deferred {
+
+    var queue as Array<Method() as Void> = [] as Array<Method() as Void>;
+    //! Set by the app: starts its ticks, which call flush()
+    var wake as Method() as Void or Null = null;
+
+    function add(deliver as Method() as Void) as Void {
+        queue.add(deliver);
+        if (wake != null) {
+            wake.invoke();
+        }
+    }
+
+    function pending() as Boolean {
+        return queue.size() > 0;
+    }
+
+    //! The app closing: nothing waits any more
+    function clear() as Void {
+        queue = [] as Array<Method() as Void>;
+        wake = null;
+    }
+
+    //! The answers waiting now; one sent again meanwhile waits for the next tick
+    function flush() as Void {
+        var now = queue;
+        queue = [] as Array<Method() as Void>;
+        for (var i = 0; i < now.size(); i++) {
+            now[i].invoke();
+        }
     }
 }

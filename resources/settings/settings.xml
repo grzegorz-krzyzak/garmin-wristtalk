@@ -39,6 +39,9 @@
             <listEntry value="120">@Strings.Idle120</listEntry>
         </settingConfig>
     </setting>
+    <setting propertyKey="@Properties.complicationText" title="@Strings.ComplicationTextTitle" prompt="@Strings.ComplicationTextPrompt">
+        <settingConfig type="alphaNumeric" maxLength="12" errorMessage="@Strings.ComplicationTextError"/>
+    </setting>
     <setting propertyKey="@Properties.help" title="@Strings.HelpTitle">
         <settingConfig type="url" readonly="true"/>
     </setting>

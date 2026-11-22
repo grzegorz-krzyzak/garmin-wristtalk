@@ -526,3 +526,31 @@ function aWholeVoiceWhoseEndNeverComesFreesTheScreenWithoutStoppingIt(logger as 
     ConversationTests.tearDown(c);
     return true;
 }
+
+(:test)
+function aWholeVoiceCutBeforeItStartedIsFreedByTheNetAsCutOff(logger as Test.Logger) as Boolean {
+    // Cut before it started (1 s of speech, then 410): played whole, its position stays 0 too; its
+    // end never coming - the net frees the screen and says the voice was cut off
+    var t = ConversationTests.setUp(true);
+    var c = t[0] as Conversation;
+    var client = t[1] as FakeClient;
+    var player = t[3] as FakePlayer;
+    VoiceTests.toVoice(c, client);
+    client.answer(RESULT_OK, 200, VoiceTests.pages(0, [0, 0, 1000] as Array<Number>, false));
+    client.answer(RESULT_EXPIRED, 410, null);
+    Test.assert(player.whole);
+    var now = System.getTimer();
+    c.checkVoice(now + 1000 + Voice.NET_MARGIN_MS - 500);
+    Test.assertEqual(c.state, STATE_PLAYING);
+    c.checkVoice(now + 1000 + Voice.NET_MARGIN_MS + 500);
+    Test.assertEqual(c.state, STATE_IDLE);
+    Test.assert(!player.stopped);
+    Test.assert(player.detached);
+    Test.assertEqual(c.popup, Settings.text(Rez.Strings.VoiceCutOff));
+    // Its "stopped" coming later changes nothing
+    player.end(true);
+    Test.assertEqual(c.state, STATE_IDLE);
+    Test.assertEqual(c.popup, Settings.text(Rez.Strings.VoiceCutOff));
+    ConversationTests.tearDown(c);
+    return true;
+}

@@ -49,6 +49,9 @@
     <string id="ReopenToRetry">Close WristTalk and open it again</string>
     <string id="NoReply">No reply</string>
     <string id="HelpTitle">Help</string>
+    <string id="ComplicationTextTitle">Watch face text</string>
+    <string id="ComplicationTextPrompt">Shown next to the WristTalk icon on a watch face (Face It and some Connect IQ faces). Up to 12 characters; empty shows the icon alone.</string>
+    <string id="ComplicationTextError">Up to 12 characters</string>
     <string id="HouseUrlTitle">House address</string>
     <string id="HouseUrlError">The address must start with https:// and name your Home Assistant</string>
     <string id="HouseUrlPrompt">The https:// address from the WristTalk integration in Home Assistant</string>

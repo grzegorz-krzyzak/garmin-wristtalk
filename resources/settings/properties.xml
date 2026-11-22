@@ -13,6 +13,8 @@
     <property id="vibration" type="number">1</property>
     <!-- Close after this many seconds without input -->
     <property id="idleExitS" type="number">30</property>
+    <!-- The text of the watch face complication (Face It, some Connect IQ faces): up to 12 characters, empty = the icon alone -->
+    <property id="complicationText" type="string">WristTalk</property>
     <!-- Read only: the help page, visible in the Connect IQ app (it does not show the settings' help links) -->
     <property id="help" type="string">https://grzegorz-krzyzak.github.io/wristtalk/help/</property>
 </properties>

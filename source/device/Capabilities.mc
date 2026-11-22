@@ -29,6 +29,11 @@ module Capabilities {
         }
     }
 
+    //! Watch faces can show WristTalk as a complication (Connect IQ 4.2)
+    function canPublishComplication() as Boolean {
+        return Toybox has :Complications;
+    }
+
     function hasNoiseFilter() as Boolean {
         return Audio.Capture.getSupportedFilters().indexOf(Audio.Capture.FILTER_NREC) >= 0;
     }

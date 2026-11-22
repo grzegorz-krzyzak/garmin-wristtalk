@@ -25,6 +25,7 @@ class AssistApp extends Application.AppBase {
     function getInitialView() as [Views] or [Views, InputDelegates] {
         var conversation = new Conversation(new HaClient(Settings.APP_VERSION), new Recorder(), new Player());
         _conversation = conversation;
+        publishComplication();
         var scroller = new Scroller();
         return [new AssistView(conversation, scroller), new AssistDelegate(conversation, scroller)];
     }
@@ -49,8 +50,22 @@ class AssistApp extends Application.AppBase {
     // Foreground only - the glance never runs it
     (:typecheck([disableGlanceCheck]))
     function onSettingsChanged() as Void {
+        publishComplication();
         if (_conversation != null) {
             _conversation.onSettingsChanged();
+        }
+    }
+
+    //! The watch face complication's text: at each start and after new settings (the face keeps the
+    //! last one). A build without the complication record (the unit tests) throws - the app goes on.
+    (:typecheck([disableGlanceCheck]))
+    private function publishComplication() as Void {
+        if (!Capabilities.canPublishComplication()) {
+            return;
+        }
+        try {
+            Toybox.Complications.updateComplication(0, {:value => Settings.complicationText()});
+        } catch (e) {
         }
     }
 

@@ -10,7 +10,7 @@ module Settings {
 
     //! The same as the version in manifest.xml (tools/build.sh release checks it): shown in the menu and
     //! sent to Home Assistant, whose watch card shows it
-    const APP_VERSION = "1.6.1";
+    const APP_VERSION = "1.6.2";
 
     function number(key as String, fallback as Number) as Number {
         var value = Application.Properties.getValue(key);
@@ -61,6 +61,18 @@ module Settings {
     function idleExitMs() as Number {
         var dev = devIdleExitMs();
         return dev > 0 ? dev : number("idleExitS", 30) * 1000;
+    }
+
+    const COMPLICATION_TEXT_MAX = 12;
+
+    //! The watch face complication's text from the settings: up to 12 characters (the setting checks
+    //! it too), empty = the icon alone; not set yet = the app's name
+    function complicationText() as String {
+        var value = Application.Properties.getValue("complicationText");
+        if (!(value instanceof String)) {
+            return "WristTalk";
+        }
+        return value.length() > COMPLICATION_TEXT_MAX ? value.substring(0, COMPLICATION_TEXT_MAX) as String : value;
     }
 
     function text(id as ResourceId) as String {
