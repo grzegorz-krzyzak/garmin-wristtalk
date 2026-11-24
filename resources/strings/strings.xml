@@ -38,6 +38,11 @@
     <string id="VoiceNotArrived">Voice did not arrive</string>
     <string id="VoiceCutOff">Voice cut off</string>
     <string id="CommandSent">Command already sent</string>
+    <string id="Cancelling">Cancelling the command…</string>
+    <string id="Cancelled">Command cancelled</string>
+    <string id="TooLate">Too late, command sent</string>
+    <string id="CancelNotConfirmed">Cancel not confirmed</string>
+    <string id="Stopped">Voice stopped</string>
     <string id="ErrNoPhone">No connection to the phone.</string>
     <string id="ErrTimeout">The house is not answering - try again shortly.</string>
     <string id="ErrTooLong">The command is too long - say it shorter.</string>

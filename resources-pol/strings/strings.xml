@@ -38,6 +38,11 @@
     <string id="VoiceNotArrived">Głos nie dotarł</string>
     <string id="VoiceCutOff">Głos się urwał</string>
     <string id="CommandSent">Komenda już wysłana</string>
+    <string id="Cancelling">Anuluję komendę…</string>
+    <string id="Cancelled">Komenda anulowana</string>
+    <string id="TooLate">Za późno, komenda wysłana</string>
+    <string id="CancelNotConfirmed">Brak potwierdzenia anulowania</string>
+    <string id="Stopped">Głos zatrzymany</string>
     <string id="ErrNoPhone">Brak połączenia z telefonem.</string>
     <string id="ErrTimeout">Dom nie odpowiada - spróbuj za chwilę.</string>
     <string id="ErrTooLong">Komenda za długa - powiedz krócej.</string>

@@ -59,8 +59,8 @@ class HaClient {
 
     // Raised with the integration on every change one side sends or expects: 2: waits within 4 s,
     // audio 202, a timed-out request repeated; 3: POST repair - "Pair again" from the menu; 4: "final"
-    // at once; 5: "recognizing"; 6: the voice in pieces while it is made
-    const PROTOCOL = "6";
+    // at once; 5: "recognizing"; 6: the voice in pieces while it is made; 7: cancel (BACK)
+    const PROTOCOL = "7";
     const API = "/api/wristtalk/v1/";
 
     private var _app as String;
@@ -104,6 +104,12 @@ class HaClient {
             :body => audio,
             :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
         }, done, null, true);
+    }
+
+    //! The watch's cancel of a command (protocol 7, BACK): `cancelled` - nothing of it runs; `too_late` -
+    //! the agent has it (with `heard`). The same answer when sent again, so a timeout repeats it
+    function cancel(session as String, done as Method(result as Result) as Void) as Void {
+        jsonPost("cancel/" + session, {} as Dictionary<Object, Object>, Settings.key(), done, true);
     }
 
     //! Long poll (4 s on the integration's side - longer does not come back through the phone):

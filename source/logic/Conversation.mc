@@ -23,7 +23,12 @@ enum PopupKind {
     POPUP_TEXT_ONLY,
     POPUP_NOT_HEARD,
     POPUP_VOICE_FAILED, // the voice did not arrive, or was cut off - the text is there
-    POPUP_COMMAND_SENT  // BACK after the command reached Home Assistant: it runs anyway
+    POPUP_COMMAND_SENT, // BACK after the command reached Home Assistant: it runs anyway
+    POPUP_CANCELLING,   // BACK while listening: the cancel is on its way
+    POPUP_CANCELLED,    // ... Home Assistant stopped the command before the agent
+    POPUP_TOO_LATE,     // ... the agent has it: it runs, its reply follows
+    POPUP_NOT_CONFIRMED, // ... no confirmation in time: it may run
+    POPUP_STOPPED       // BACK while the voice loads or plays
 }
 
 enum EntryKind {
@@ -41,7 +46,8 @@ class Conversation {
     const CONNECTING_CAP_MS = 10500;     // no answer: a connection error
     const NO_SPEECH_MS = 12000;          // from the first audio: nothing said -> "nothing heard"; 5 s was
                                          // too short through the phone (speech reached HA after 5-7 s)
-    const LISTEN_CAP_MS = 25000;         // the integration closes at 20 s; this only guards the watch
+    const LISTEN_CAP_MS = 20000;         // the end of a command that has no silence (noise): "final" here is the
+                                         // integration's sign the watch still wants it run (it waits for it after its own 20 s)
     // From the end of listening to the reply text at most this long, whatever the house answers on
     // the way ("listening", "waiting" reset NO_ANSWER_MS, not this)
     const ANSWER_CAP_MS = 60000;
@@ -68,6 +74,10 @@ class Conversation {
                                          // came back, the app stayed in "Recognising"; reopening the
                                          // app helped
     const VOICE_POPUP_MS = 2000;         // the voice failed: a note over the reply, then the reply
+    // BACK's cancel: no answer by then - "not confirmed". Measured: confirmed in 0.3-2.1 s (20 tries, Wi-Fi and
+    // 5G); the longest rounded up to a second, plus one
+    static const CANCEL_CONFIRM_MS = 4000;
+    const CANCEL_RETRY_MS = 500;         // a cancel failing at once is sent again after this
 
     var state as State = STATE_IDLE;
     var heard as String = "";
@@ -117,8 +127,10 @@ class Conversation {
     private var _voice as Voice?;
     // The open reply poll and ping - abandoned when their command or key is given up
     private var _replyRequest as AnswerRequest?;
-    // The command's end ("final") has been sent: from then on Home Assistant runs it
-    private var _finalSent as Boolean = false;
+    // The cancel of a command (BACK while listening or recognising) until its answer or CANCEL_CONFIRM_MS
+    private var _cancelRequest as AnswerRequest?;
+    private var _cancelSession as String = "";
+    private var _cancelUntil as Number = 0;
     private var _pingRequest as AnswerRequest?;
     private var _answeredAt as Number = 0;   // the house's last answer in this command
     private var _listenUntil as Number = 0;  // listening ends by itself then
@@ -293,6 +305,7 @@ class Conversation {
         Settings.clearKey();
         Settings.clearPairingInProgress();
         stopCommand();
+        endCancel();  // its retry would take the wait the pairing uses, its late answer the screen
         pairing.notice = "";
         beginPairing();
     }
@@ -333,6 +346,11 @@ class Conversation {
             keepOpen();
             return;
         }
+        if (cancelShowing()) {
+            // The cancel's answer first (up to CANCEL_CONFIRM_MS, then shown for VOICE_POPUP_MS): a new
+            // command would drop it or hide it, and a command too late to stop would run unsaid
+            return;
+        }
         if (state == STATE_PAIRING) {
             if (pairing.code.length() == 0) {
                 pairing.begin();
@@ -356,14 +374,26 @@ class Conversation {
             dismissPopup();
             return true;
         }
-        if (state == STATE_LISTENING || state == STATE_RECOGNIZING || state == STATE_SENDING
-                || state == STATE_LOADING_VOICE || state == STATE_PLAYING) {
-            // Once the end of the command is in Home Assistant, BACK only stops waiting for the
-            // reply - the command runs (a gate, a lock, the car): it must not look like a cancel
-            var sent = state == STATE_RECOGNIZING || state == STATE_SENDING || _finalSent;
+        if (state == STATE_LISTENING || state == STATE_RECOGNIZING) {
+            // Home Assistant may not have the command yet: it is asked to cancel it, and says whether
+            // it did - the screen says what it answered, never more
+            var session = _session;
             stopCommand();
             setState(STATE_IDLE, SHOW_NOW);
-            if (sent) {
+            startCancel(session);
+            armIdleExit(Settings.idleExitMs());
+            WatchUi.requestUpdate();
+            return true;
+        }
+        if (state == STATE_SENDING || state == STATE_LOADING_VOICE || state == STATE_PLAYING) {
+            // The agent has the command (a gate, a lock, the car): BACK only stops waiting for the
+            // reply, or its voice - it must not look like a cancel
+            var voice = state != STATE_SENDING;
+            stopCommand();
+            setState(STATE_IDLE, SHOW_NOW);
+            if (voice) {
+                showPopup(POPUP_STOPPED, Settings.text(Rez.Strings.Stopped), VOICE_POPUP_MS);
+            } else {
                 showPopup(POPUP_COMMAND_SENT, Settings.text(Rez.Strings.CommandSent), VOICE_POPUP_MS);
             }
             armIdleExit(Settings.idleExitMs());
@@ -447,8 +477,8 @@ class Conversation {
         abandon(_replyRequest);
         _replyRequest = null;
         _finalPending = false;
-        _finalSent = false;
         _awaitingRest = false;
+        endCancel();
         _inputEnded = false;
         _speech = false;
         _textOnly = Settings.textOnly();
@@ -549,9 +579,6 @@ class Conversation {
         }
         var offset = _sent;
         _sent = _audio.size();
-        if (final) {
-            _finalSent = true;
-        }
         send(new ChunkRequest(offset, _sent - offset, final, 1, method(:onChunk)));
     }
 
@@ -619,6 +646,11 @@ class Conversation {
         if (_noAnswers >= 2) {
             errorHint = Settings.text(Rez.Strings.ReopenToRetry);
         }
+    }
+
+    //! For the tests only: the animation's ticks run (they keep the waits checked)
+    function animating() as Boolean {
+        return _animating;
     }
 
     //! For the tests only: the house's last answer at a given time (the answers themselves take
@@ -824,6 +856,10 @@ class Conversation {
     }
 
     private function stopCommand() as Void {
+        // "final" means "run it" to the integration - only START or the listening cap send it; the
+        // microphone's end, reported while it stops here, must not
+        _awaitingRest = false;
+        _finalPending = false;
         abandonChunks();
         _audio = []b;
         // A reply poll still open belongs to this command: its late answer must not land on the next
@@ -834,6 +870,99 @@ class Conversation {
         stopVoice();
         _player.stop();
         stopTicks();
+    }
+
+    // --- cancel (protocol 7) -------------------------------------------------------------------
+
+    private function startCancel(session as String) as Void {
+        _cancelSession = session;
+        _cancelUntil = System.getTimer() + CANCEL_CONFIRM_MS;
+        showPopup(POPUP_CANCELLING, Settings.text(Rez.Strings.Cancelling), 0);
+        runTicks();
+        sendCancel();
+    }
+
+    //! Also after a failure, within the limit: the integration answers a repeated cancel the same way
+    function sendCancel() as Void {
+        if (_cancelUntil == 0) {
+            return;
+        }
+        abandon(_cancelRequest);
+        var request = new AnswerRequest(method(:onCancel));
+        _cancelRequest = request;
+        _client.cancel(_cancelSession, request.method(:onResult));
+    }
+
+    function onCancel(result as Result) as Void {
+        _cancelRequest = null;
+        if (_cancelUntil == 0) {
+            return;
+        }
+        if (!result.ok()) {
+            if (System.getTimer() + CANCEL_RETRY_MS < _cancelUntil) {
+                waitThen(CANCEL_RETRY_MS, method(:sendCancel));
+            } else {
+                cancelNotConfirmed();
+            }
+            return;
+        }
+        var answer = result.text("state");
+        if (answer.equals("cancelled")) {
+            endCancel();
+            showPopup(POPUP_CANCELLED, Settings.text(Rez.Strings.Cancelled), VOICE_POPUP_MS);
+        } else if (answer.equals("too_late")) {
+            // The agent has it: what it does happens. "Too late" first, on its own - the reply is
+            // usually there already and would come in under it - then the usual "Thinking" and reply
+            endCancel();
+            heard = result.text("heard");
+            showPopup(POPUP_TOO_LATE, Settings.text(Rez.Strings.TooLate), VOICE_POPUP_MS);
+            waitThen(VOICE_POPUP_MS, method(:afterTooLate));
+        } else {
+            cancelNotConfirmed();
+        }
+    }
+
+    //! "Too late" has been read: the command's reply, as after any command
+    function afterTooLate() as Void {
+        if (state != STATE_IDLE) {
+            return;
+        }
+        if (popup.length() > 0 && popupKind == POPUP_TOO_LATE) {
+            dismissPopup();
+        }
+        idle.stop();
+        startAnswerDeadline();
+        // BACK stopped the ticks: without them nothing would notice a reply poll lost on the way
+        _answeredAt = System.getTimer();
+        setState(STATE_SENDING, SHOW_WAITING);
+        startTicks();
+        askReply();
+    }
+
+    //! The cancel is not over for the user until its answer has been read: waiting for it, or its
+    //! answer on the screen (START would take it away at once)
+    private function cancelShowing() as Boolean {
+        return _cancelUntil > 0 || (popup.length() > 0 && (popupKind == POPUP_CANCELLED
+            || popupKind == POPUP_TOO_LATE || popupKind == POPUP_NOT_CONFIRMED));
+    }
+
+    //! On every tick: no answer within CANCEL_CONFIRM_MS
+    function checkCancel(now as Number) as Void {
+        if (_cancelUntil > 0 && now >= _cancelUntil) {
+            cancelNotConfirmed();
+        }
+    }
+
+    private function cancelNotConfirmed() as Void {
+        endCancel();
+        showPopup(POPUP_NOT_CONFIRMED, Settings.text(Rez.Strings.CancelNotConfirmed), VOICE_POPUP_MS);
+    }
+
+    //! The cancel is over (answered, given up, or a new command): its late answer reaches nothing
+    private function endCancel() as Void {
+        abandon(_cancelRequest);
+        _cancelRequest = null;
+        _cancelUntil = 0;
     }
 
     // --- endings ------------------------------------------------------------------------------
@@ -1056,7 +1185,7 @@ class Conversation {
     //! voice (its limits, a stall and its revival), or a request's answer waiting (net/Deferred)
     private function fastTicksNeeded() as Boolean {
         return _animating || (popup.length() > 0 && _popupUntil > 0) || !shown.settled() || _voice != null
-            || Deferred.pending();
+            || Deferred.pending() || _cancelUntil > 0;
     }
 
     private function startTicks() as Void {
@@ -1092,6 +1221,7 @@ class Conversation {
         checkListening(now);
         checkAnswers(now);
         checkVoice(now);
+        checkCancel(now);
         var changed = shown.update(now);
         if (popup.length() > 0 && _popupUntil > 0 && now >= _popupUntil) {
             popup = "";

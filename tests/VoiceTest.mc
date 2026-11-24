@@ -389,7 +389,7 @@ function backStopsTheVoiceAndItsRequests(logger as Test.Logger) as Boolean {
     var asked = client.calls.size();
     client.answer(RESULT_OK, 200, VoiceTests.pages(5, [4000] as Array<Number>, true));
     Test.assertEqual(client.calls.size(), asked);
-    Test.assertEqual(c.popup, "");
+    Test.assertEqual(c.popup, Settings.text(Rez.Strings.Stopped));
     ConversationTests.tearDown(c);
     return true;
 }

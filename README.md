@@ -4,7 +4,7 @@ A Connect IQ app: press START, say a command, see it and the reply as chat bubbl
 reply from the watch speaker. The command goes to an Assist pipeline of your Home Assistant through
 the **WristTalk integration** ([ha-wristtalk](https://github.com/grzegorz-krzyzak/ha-wristtalk)),
 which has to be installed first. The middle number of the version is the protocol the app and the
-integration speak: the app 1.6.x needs the integration 1.6.0 or newer.
+integration speak: the app 1.7.x needs the integration 1.7.0 or newer.
 
 **A personal, non-commercial hobby project by a private individual.** Not affiliated with or endorsed by
 the Open Home Foundation, Home Assistant or Garmin.

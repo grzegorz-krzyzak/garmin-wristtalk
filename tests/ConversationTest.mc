@@ -15,6 +15,7 @@ class FakeClient extends HaClient {
     //! The callbacks of the requests not answered yet, oldest first
     var pending as Array<Method(result as Result) as Void> = [] as Array<Method(result as Result) as Void>;
     var lastChunk as Array = [];
+    var finals as Number = 0;  // chunks sent marked "final" (the user wants the command run)
 
     function initialize() {
         HaClient.initialize("test");
@@ -44,6 +45,14 @@ class FakeClient extends HaClient {
             final as Boolean, done as Method(result as Result) as Void) as Void {
         calls.add("chunk");
         lastChunk = [offset, audio.size(), textOnly, final];
+        if (final) {
+            finals++;
+        }
+        pending.add(done);
+    }
+
+    function cancel(session as String, done as Method(result as Result) as Void) as Void {
+        calls.add("cancel");
         pending.add(done);
     }
 
@@ -64,6 +73,13 @@ class FakeClient extends HaClient {
     function answer(kind as ResultKind, code as Number, data as Dictionary or ByteArray or Null) as Void {
         var done = pending[0];
         pending = pending.slice(1, null);
+        done.invoke(new Result(kind, code, data));
+    }
+
+    //! The newest request answered first (the cancel after a chunk still on its way)
+    function answerLast(kind as ResultKind, code as Number, data as Dictionary or ByteArray or Null) as Void {
+        var done = pending[pending.size() - 1];
+        pending = pending.slice(0, pending.size() - 1);
         done.invoke(new Result(kind, code, data));
     }
 }
@@ -1430,12 +1446,12 @@ function backAfterTheCommandWasSentSaysItRunsAnyway(logger as Test.Logger) as Bo
     Test.assert(c.onBack());
     Test.assertEqual(c.state, STATE_IDLE);
     Test.assertEqual(c.popup, Settings.text(Rez.Strings.CommandSent));
-    // BACK while still listening, nothing sent as the end: a plain stop
+    // BACK while still listening: Home Assistant is asked to cancel it (CancelTest)
     c.onBack();
     c.onSelect();
     Test.assertEqual(c.state, STATE_LISTENING);
     Test.assert(c.onBack());
-    Test.assertEqual(c.popup, "");
+    Test.assertEqual(c.popup, Settings.text(Rez.Strings.Cancelling));
     ConversationTests.tearDown(c);
     return true;
 }
@@ -1459,7 +1475,8 @@ function busyHomeAssistantKeepsTheKey(logger as Test.Logger) as Boolean {
 
 (:test)
 function listeningEndsAtItsCapWhileSpeechGoesOn(logger as Test.Logger) as Boolean {
-    // the first audio re-armed the wait timer for "nothing said" - the 25 s cap was gone
+    // the first audio re-armed the wait timer for "nothing said" - the cap was gone; the cap is 20 s, the
+    // integration's own, so its "final" comes while the integration still waits for it
     var t = ConversationTests.setUp(true);
     var c = t[0] as Conversation;
     var client = t[1] as FakeClient;
@@ -1467,9 +1484,9 @@ function listeningEndsAtItsCapWhileSpeechGoesOn(logger as Test.Logger) as Boolea
     c.onAudioData([1]b);
     client.answer(RESULT_OK, 200, { "state" => "listening", "speech" => true });
     var now = System.getTimer();
-    c.checkListening(now + 24000);
+    c.checkListening(now + 19000);
     Test.assertEqual(c.state, STATE_LISTENING);
-    c.checkListening(now + 25100);
+    c.checkListening(now + 20100);
     Test.assertEqual(c.state, STATE_RECOGNIZING);
     ConversationTests.tearDown(c);
     return true;

@@ -9,7 +9,9 @@ enum NoticeIcon {
     NOTICE_QUESTION,
     NOTICE_DONE,
     NOTICE_SPEAKER,
-    NOTICE_SPEAKER_OFF
+    NOTICE_SPEAKER_OFF,
+    NOTICE_CROSS,
+    NOTICE_NO_ENTRY
 }
 
 //! Draws what the conversation holds; knows nothing about the network
@@ -237,7 +239,12 @@ class AssistView extends WatchUi.View {
         if (c.popup.length() > 0 && c.shown.settled()) {
             var kind = c.popupKind;
             drawNotice(dc, lineY,
-                kind == POPUP_PAIRED || kind == POPUP_COMMAND_SENT ? NOTICE_DONE : kind == POPUP_NOT_HEARD ? NOTICE_QUESTION
+                // BACK that did not stop the command (it runs): "!"; whether it did is not known: "?"
+                kind == POPUP_PAIRED ? NOTICE_DONE
+                    : kind == POPUP_COMMAND_SENT || kind == POPUP_TOO_LATE ? NOTICE_ERROR
+                    : kind == POPUP_NOT_HEARD || kind == POPUP_NOT_CONFIRMED ? NOTICE_QUESTION
+                    : kind == POPUP_CANCELLING || kind == POPUP_CANCELLED ? NOTICE_CROSS
+                    : kind == POPUP_STOPPED ? NOTICE_NO_ENTRY
                     : kind == POPUP_TEXT_ONLY || kind == POPUP_VOICE_FAILED ? NOTICE_SPEAKER_OFF : NOTICE_SPEAKER,
                 c.popup, kind == POPUP_NOT_HEARD ? Settings.text(Rez.Strings.NotHeardHint) : "");
             return;
@@ -279,6 +286,17 @@ class AssistView extends WatchUi.View {
             dc.setPenWidth(3);
             dc.drawLine(cx - 10, cy, cx - 3, cy + 7);
             dc.drawLine(cx - 3, cy + 7, cx + 10, cy - 7);
+            dc.setPenWidth(1);
+        } else if (icon == NOTICE_CROSS) {
+            dc.setPenWidth(3);
+            dc.drawLine(cx - 8, cy - 8, cx + 8, cy + 8);
+            dc.drawLine(cx - 8, cy + 8, cx + 8, cy - 8);
+            dc.setPenWidth(1);
+        } else if (icon == NOTICE_NO_ENTRY) {
+            // A no-entry sign: a ring with a bar across - stop
+            dc.setPenWidth(3);
+            dc.drawCircle(cx, cy, MARK_RADIUS);
+            dc.fillRectangle(cx - MARK_RADIUS + 4, cy - 2, 2 * MARK_RADIUS - 8, 4);
             dc.setPenWidth(1);
         } else {
             // The status line's speaker, at the mark's size
